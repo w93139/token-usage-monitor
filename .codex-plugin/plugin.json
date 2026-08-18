@@ -1,0 +1,27 @@
+{
+  "name": "token-usage-monitor",
+  "version": "0.1.0+codex.20260818190159",
+  "description": "Track Codex token activity and rate-limit resets locally in real time.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Token Usage Monitor",
+    "shortDescription": "Track token activity, limits, and resets locally.",
+    "longDescription": "A privacy-focused local monitor for Codex token activity, daily history, rate-limit windows, reset credits, and threshold notifications. It stores usage metadata only and never stores prompt or response text.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Show my current token usage and rate limits.",
+      "Summarize my token usage for the last 7 days.",
+      "Check whether I received an extra rate-limit reset."
+    ],
+    "brandColor": "#10A37F"
+  },
+  "mcpServers": "./.mcp.json"
+}

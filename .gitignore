@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__/
+*.pyc
+macos/TokenUsageMonitor/.build/
+macos/TokenUsageMonitor/.product-build/
+macos/TokenUsageMonitor/dist/

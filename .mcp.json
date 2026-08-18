@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "token-usage-monitor": {
+      "cwd": ".",
+      "command": "python3",
+      "args": [
+        "./scripts/mcp_server.py"
+      ]
+    }
+  }
+}
