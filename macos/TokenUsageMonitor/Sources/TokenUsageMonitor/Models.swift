@@ -13,6 +13,41 @@ struct DailyUsage: Codable, Identifiable, Equatable {
     var id: String { date }
 }
 
+struct TaskUsageRecord: Codable, Identifiable, Equatable {
+    var id: String
+    var title: String
+    var tokens: Int
+    var createdAt: Date
+    var updatedAt: Date
+    var model: String?
+    var archived: Bool
+
+    var displayTitle: String {
+        let cleaned = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "未命名任务" : cleaned
+    }
+}
+
+struct APIUsageRecord: Codable, Identifiable, Equatable {
+    var id: Int
+    var capturedAt: Date
+    var provider: String
+    var model: String
+    var taskName: String?
+    var inputTokens: Int
+    var cachedInputTokens: Int
+    var outputTokens: Int
+    var reasoningTokens: Int
+    var totalTokens: Int
+
+    var displayTaskName: String {
+        guard let taskName, !taskName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "API 调用"
+        }
+        return taskName
+    }
+}
+
 struct RateWindow: Codable, Identifiable, Equatable {
     var limitID: String
     var limitName: String?

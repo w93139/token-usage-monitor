@@ -125,6 +125,23 @@ class UsageStore:
             total_tokens INTEGER,
             raw_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS api_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            captured_at INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            task_name TEXT,
+            request_id TEXT,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'response',
+            UNIQUE(provider, request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_usage_captured_at ON api_usage(captured_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_api_usage_provider_model ON api_usage(provider, model);
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             captured_at INTEGER NOT NULL,
@@ -279,6 +296,106 @@ class UsageStore:
                     _json(params),
                 ),
             )
+
+    def save_api_usage(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Persist token counts from an API response without storing request/response text."""
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else payload
+        provider = str(payload.get("provider") or "custom").strip().lower()[:64]
+        model = str(payload.get("model") or usage.get("model") or "unknown").strip()[:128]
+        task_name_raw = payload.get("taskName", payload.get("task_name"))
+        task_name = str(task_name_raw).strip()[:280] if task_name_raw else None
+        request_id_raw = payload.get("requestId", payload.get("request_id", payload.get("id")))
+        request_id = str(request_id_raw).strip()[:200] if request_id_raw else None
+
+        input_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
+        output_details = usage.get("output_tokens_details") or usage.get("completion_tokens_details") or {}
+        input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
+        cached_tokens = int(
+            usage.get("cached_input_tokens", usage.get("prompt_cache_hit_tokens", input_details.get("cached_tokens", 0))) or 0
+        )
+        output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+        reasoning_tokens = int(
+            usage.get("reasoning_tokens", output_details.get("reasoning_tokens", output_details.get("reasoning_output_tokens", 0))) or 0
+        )
+        total_tokens = int(usage.get("total_tokens", usage.get("totalTokens", input_tokens + output_tokens)) or 0)
+        values = [input_tokens, cached_tokens, output_tokens, reasoning_tokens, total_tokens]
+        if any(value < 0 for value in values):
+            raise ValueError("Token counts must be non-negative")
+        if total_tokens == 0 and input_tokens == 0 and output_tokens == 0:
+            raise ValueError("At least one token count is required")
+
+        captured_at = int(payload.get("capturedAt", payload.get("captured_at", _now())) or _now())
+        source = str(payload.get("source") or "response").strip()[:64]
+        with self._lock, self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO api_usage "
+                "(captured_at, provider, model, task_name, request_id, input_tokens, cached_input_tokens, "
+                "output_tokens, reasoning_tokens, total_tokens, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    captured_at, provider, model, task_name, request_id, input_tokens, cached_tokens,
+                    output_tokens, reasoning_tokens, total_tokens, source,
+                ),
+            )
+            inserted = cursor.rowcount > 0
+        return {
+            "recorded": inserted,
+            "provider": provider,
+            "model": model,
+            "taskName": task_name,
+            "requestId": request_id,
+            "inputTokens": input_tokens,
+            "cachedInputTokens": cached_tokens,
+            "outputTokens": output_tokens,
+            "reasoningTokens": reasoning_tokens,
+            "totalTokens": total_tokens,
+            "capturedAt": captured_at,
+        }
+
+    def api_usage_history(self, days: int = 30, limit: int = 200) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, captured_at, provider, model, task_name, request_id, input_tokens, "
+                "cached_input_tokens, output_tokens, reasoning_tokens, total_tokens, source "
+                "FROM api_usage WHERE captured_at >= strftime('%s', 'now', ?) "
+                "ORDER BY captured_at DESC, id DESC LIMIT ?",
+                (f"-{max(0, days - 1)} days", max(1, min(2000, limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def codex_task_history(self, limit: int = 100) -> list[dict[str, Any]]:
+        override = os.environ.get("CODEX_STATE_DB")
+        if override:
+            database = Path(override).expanduser()
+        else:
+            candidates = sorted((Path.home() / ".codex").glob("state_*.sqlite"), reverse=True)
+            if not candidates:
+                return []
+            database = candidates[0]
+        if not database.is_file():
+            return []
+        query = """
+            SELECT id,
+                   SUBSTR(COALESCE(NULLIF(TRIM(name), ''), NULLIF(TRIM(title), ''), '未命名任务'), 1, 280) AS title,
+                   tokens_used AS tokens,
+                   created_at,
+                   updated_at,
+                   NULLIF(model, '') AS model,
+                   archived
+            FROM threads
+            WHERE tokens_used > 0
+              AND thread_source = 'user'
+              AND agent_role IS NULL
+              AND id NOT IN (SELECT child_thread_id FROM thread_spawn_edges)
+            ORDER BY updated_at DESC
+            LIMIT ?
+        """
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
+        try:
+            rows = connection.execute(query, (max(1, min(1000, limit)),)).fetchall()
+        finally:
+            connection.close()
+        return [dict(row) for row in rows]
 
     def summary(self) -> dict[str, Any]:
         with self._lock, self._connect() as conn:

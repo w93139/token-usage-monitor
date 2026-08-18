@@ -7,6 +7,10 @@ The repository also includes a native macOS 13+ menu-bar app in
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
+Version 1.1 adds a custom app icon, five-second per-task tracking with local
+conversation names, and provider-neutral API usage ingestion for OpenAI,
+DeepSeek, and other OpenAI-compatible models.
+
 ## macOS menu-bar app
 
 Build the finished app with:
@@ -29,8 +33,42 @@ download that opens without Gatekeeper review on other Macs.
 - Current rate-limit percentages, window lengths, and scheduled reset times
 - Earned reset-credit metadata
 - Thread token-usage events when the connected App Server emits them
+- Per-task Codex totals with the user-facing conversation title
+- API response usage counters grouped by provider, model, and optional task name
 
-It does **not** request or store prompt text, response text, files, API keys, or account email addresses.
+It does **not** request or store prompt bodies, response bodies, files, API keys, or account email addresses.
+
+## External API usage
+
+While the macOS app is running, a loopback-only endpoint accepts usage metadata:
+
+```text
+POST http://127.0.0.1:47821/v1/usage
+Content-Type: application/json
+```
+
+Example payload:
+
+```json
+{
+  "provider": "deepseek",
+  "model": "deepseek-chat",
+  "task_name": "Summarize reports",
+  "request_id": "request-123",
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 30,
+    "total_tokens": 150
+  }
+}
+```
+
+The endpoint accepts both OpenAI `input_tokens`/`output_tokens` fields and
+OpenAI-compatible `prompt_tokens`/`completion_tokens` fields. It never proxies
+requests and must never receive an API key, prompt, or response body. OpenAI's
+organization-wide Usage API requires an admin key; DeepSeek exposes per-response
+usage and an account balance endpoint, so response-level ingestion is the
+portable default.
 
 ## Runtime behavior
 
@@ -52,6 +90,7 @@ Use the `configure_usage_alerts` tool to change these settings. Set `TOKEN_USAGE
 - ChatGPT token activity summaries require Codex-backed authentication. API-key-only and Bedrock authentication do not expose that account summary endpoint.
 - An unannounced extra reset can only be detected when the service grants it; the plugin cannot predict a future grant that the service has not exposed.
 - Exact live thread counters depend on `thread/tokenUsage/updated` events being visible to the connected App Server. Account and quota polling still works when those events are unavailable.
+- External API usage is recorded when the calling application posts the response `usage` object or invokes the `record_api_usage` MCP tool; the monitor does not intercept HTTPS traffic.
 - The plugin does not calculate subscription allowance as a fictional fixed token budget.
 
 ## Local tests

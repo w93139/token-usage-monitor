@@ -26,6 +26,27 @@ fi
 
 install -m 755 "$binary_path" "$app_path/Contents/MacOS/TokenUsageMonitor"
 install -m 644 "$project_dir/AppInfo.plist" "$app_path/Contents/Info.plist"
+install -m 644 "$project_dir/../../scripts/token_monitor.py" "$app_path/Contents/Resources/token_monitor.py"
+install -m 644 "$project_dir/../../scripts/api_usage_server.py" "$app_path/Contents/Resources/api_usage_server.py"
+
+icon_source="$project_dir/Assets/AppIcon-master.png"
+if [[ -f "$icon_source" ]]; then
+  iconset="$build_dir/AppIcon.iconset"
+  mkdir -p "$iconset"
+  sips -z 16 16 "$icon_source" --out "$iconset/icon_16x16.png" >/dev/null
+  sips -z 32 32 "$icon_source" --out "$iconset/icon_16x16@2x.png" >/dev/null
+  sips -z 32 32 "$icon_source" --out "$iconset/icon_32x32.png" >/dev/null
+  sips -z 64 64 "$icon_source" --out "$iconset/icon_32x32@2x.png" >/dev/null
+  sips -z 128 128 "$icon_source" --out "$iconset/icon_128x128.png" >/dev/null
+  sips -z 256 256 "$icon_source" --out "$iconset/icon_128x128@2x.png" >/dev/null
+  sips -z 256 256 "$icon_source" --out "$iconset/icon_256x256.png" >/dev/null
+  sips -z 512 512 "$icon_source" --out "$iconset/icon_256x256@2x.png" >/dev/null
+  sips -z 512 512 "$icon_source" --out "$iconset/icon_512x512.png" >/dev/null
+  sips -z 1024 1024 "$icon_source" --out "$iconset/icon_512x512@2x.png" >/dev/null
+  iconutil -c icns "$iconset" -o "$build_dir/AppIcon.icns"
+  install -m 644 "$build_dir/AppIcon.icns" "$app_path/Contents/Resources/AppIcon.icns"
+fi
+
 plutil -lint "$app_path/Contents/Info.plist" >/dev/null
 codesign --force --deep --sign - "$app_path"
 codesign --verify --deep --strict "$app_path"

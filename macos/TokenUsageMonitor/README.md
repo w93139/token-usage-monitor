@@ -9,6 +9,8 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 - Local notifications at configurable thresholds
 - Detection of scheduled resets and newly granted reset credits
 - Manual refresh, local-only storage, and optional launch at login
+- Five-second per-task token totals with local conversation titles
+- Local usage ingestion for OpenAI, DeepSeek, and compatible API responses
 - No prompt text, response text, email address, or API key collection
 
 ## Build

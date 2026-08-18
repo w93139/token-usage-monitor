@@ -1,3 +1,4 @@
+import AppKit
 import Charts
 import ServiceManagement
 import SwiftUI
@@ -5,6 +6,7 @@ import SwiftUI
 struct MonitorPanel: View {
     @ObservedObject var monitor: MonitorStore
     @State private var showsSettings = false
+    @State private var showsSupplementalLimits = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -72,10 +74,29 @@ struct MonitorPanel: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 45)
             } else {
-                ForEach(monitor.snapshot.rateWindows) { window in rateCard(window) }
+                ForEach(visibleRateWindows) { window in rateCard(window) }
+                if hiddenSupplementalCount > 0 && !showsSupplementalLimits {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { showsSupplementalLimits = true }
+                    } label: {
+                        Label("显示 \(hiddenSupplementalCount) 个未使用的模型专属额度", systemImage: "plus.circle")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                } else if showsSupplementalLimits && supplementalWindows.count > 0 {
+                    Button("隐藏未使用的模型专属额度") {
+                        withAnimation(.easeInOut(duration: 0.2)) { showsSupplementalLimits = false }
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
 
             if let account = monitor.snapshot.account { summaryCard(account) }
+            if !monitor.taskRecords.isEmpty { taskUsageCard }
+            apiUsageCard
             if !monitor.snapshot.dailyUsage.isEmpty { historyChart }
 
             if monitor.snapshot.availableResetCredits > 0 {
@@ -94,7 +115,10 @@ struct MonitorPanel: View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
                 Text(window.displayName).font(.subheadline.weight(.semibold))
-                if window.windowName == "secondary" {
+                if window.limitID != "codex" {
+                    Text("模型专属").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
+                        .background(Color.blue.opacity(0.12), in: Capsule())
+                } else if window.windowName == "secondary" {
                     Text("次级").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
                         .background(.secondary.opacity(0.12), in: Capsule())
                 }
@@ -116,6 +140,11 @@ struct MonitorPanel: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            if window.limitID != "codex" {
+                Text("独立可用额度，不代表当前正在使用此模型")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
@@ -164,31 +193,145 @@ struct MonitorPanel: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private var taskUsageCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("任务 Token 记录").font(.subheadline.weight(.semibold))
+                Spacer()
+                Label("5 秒刷新", systemImage: "bolt.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
+            ForEach(Array(monitor.taskRecords.prefix(10))) { task in
+                HStack(spacing: 10) {
+                    Image(systemName: "bubble.left.and.text.bubble.right")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(task.displayTitle)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                        HStack(spacing: 5) {
+                            Text(task.updatedAt, style: .relative)
+                            if let model = task.model, !model.isEmpty {
+                                Text("·")
+                                Text(model)
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+                    Spacer(minLength: 8)
+                    Text(compact(task.tokens))
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                    Text("tokens")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                if task.id != monitor.taskRecords.prefix(10).last?.id { Divider() }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var apiUsageCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("外部 API 用量").font(.subheadline.weight(.semibold))
+                Spacer()
+                HStack(spacing: 4) {
+                    Circle().fill(monitor.apiMonitorAvailable ? Color.green : Color.orange).frame(width: 6, height: 6)
+                    Text(monitor.apiMonitorAvailable ? "本机监听中" : "未启动")
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            if monitor.apiRecords.isEmpty {
+                Text("支持 OpenAI、DeepSeek 及 OpenAI 兼容模型；记录 API 响应中的 usage，不保存提示词、回复或密钥。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ForEach(Array(monitor.apiRecords.prefix(8))) { record in
+                    HStack(spacing: 9) {
+                        Text(record.provider.uppercased())
+                            .font(.system(size: 8, weight: .bold))
+                            .padding(.horizontal, 5).padding(.vertical, 3)
+                            .background(Color.purple.opacity(0.13), in: Capsule())
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(record.displayTaskName).font(.caption.weight(.medium)).lineLimit(1)
+                            Text("\(record.model) · \(record.capturedAt, style: .relative)")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 6)
+                        Text(compact(record.totalTokens))
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                        Text("tokens").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if record.id != monitor.apiRecords.prefix(8).last?.id { Divider() }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private var settings: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("提醒设置").font(.headline)
-            Toggle("系统通知", isOn: $monitor.notificationsEnabled)
-                .onChange(of: monitor.notificationsEnabled) { _ in monitor.updateNotificationPermissionIfNeeded() }
-            VStack(alignment: .leading, spacing: 5) {
-                Text("用量阈值").font(.subheadline)
-                TextField("80, 95, 100", text: $monitor.thresholdText).textFieldStyle(.roundedBorder)
-                Text("使用逗号分隔，范围为 1–100").font(.caption).foregroundStyle(.secondary)
+            Group {
+                Text("提醒设置").font(.headline)
+                Toggle("系统通知", isOn: $monitor.notificationsEnabled)
+                    .onChange(of: monitor.notificationsEnabled) { _ in monitor.updateNotificationPermissionIfNeeded() }
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("用量阈值").font(.subheadline)
+                    TextField("80, 95, 100", text: $monitor.thresholdText).textFieldStyle(.roundedBorder)
+                    Text("使用逗号分隔，范围为 1–100").font(.caption).foregroundStyle(.secondary)
+                }
+                Stepper("刷新前提醒：\(monitor.resetWarningMinutes) 分钟", value: $monitor.resetWarningMinutes, in: 5...240, step: 5)
             }
-            Stepper("刷新前提醒：\(monitor.resetWarningMinutes) 分钟", value: $monitor.resetWarningMinutes, in: 5...240, step: 5)
 
-            Divider()
-            Text("应用").font(.headline)
-            LaunchAtLoginToggle()
-            Button("打开本地数据目录") { monitor.openDataFolder() }
-
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                Label("只保存用量数字，不读取或保存对话正文", systemImage: "lock.shield")
-                Label("额外刷新只提醒，不会自动兑换", systemImage: "hand.raised")
-                Label("每 60 秒刷新一次", systemImage: "clock.arrow.circlepath")
+            Group {
+                Divider()
+                Text("应用").font(.headline)
+                LaunchAtLoginToggle()
+                Button("打开本地数据目录") { monitor.openDataFolder() }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+
+            Group {
+                Divider()
+                Text("API 监控").font(.headline)
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("本机记录端点").font(.subheadline)
+                        Text("http://127.0.0.1:47821/v1/usage")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("复制") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("http://127.0.0.1:47821/v1/usage", forType: .string)
+                    }
+                }
+                Text("将 OpenAI、DeepSeek 或兼容 API 响应中的 usage 对象发送到此端点，即可按模型和任务记录。API Key 不应发送给监控器。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Group {
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("只保存用量数字，不读取或保存对话正文", systemImage: "lock.shield")
+                    Label("额外刷新只提醒，不会自动兑换", systemImage: "hand.raised")
+                    Label("任务每 5 秒、账户额度每 30 秒刷新", systemImage: "clock.arrow.circlepath")
+                    Label("本机保存任务名称与 Token 数，不保存对话正文", systemImage: "text.badge.checkmark")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
         }
         .padding(16)
     }
@@ -231,6 +374,20 @@ struct MonitorPanel: View {
     private func compact(_ number: Int?) -> String {
         guard let number else { return "—" }
         return number.formatted(.number.notation(.compactName))
+    }
+
+    private var supplementalWindows: [RateWindow] {
+        monitor.snapshot.rateWindows.filter { $0.limitID != "codex" }
+    }
+
+    private var hiddenSupplementalCount: Int {
+        supplementalWindows.filter { $0.usedPercent == 0 }.count
+    }
+
+    private var visibleRateWindows: [RateWindow] {
+        monitor.snapshot.rateWindows.filter {
+            $0.limitID == "codex" || $0.usedPercent > 0 || showsSupplementalLimits
+        }
     }
 }
 

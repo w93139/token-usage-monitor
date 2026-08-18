@@ -64,6 +64,49 @@ TOOLS = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "record_api_usage",
+        "description": "Record token counters from an OpenAI-compatible API response (OpenAI, DeepSeek, or another provider). Stores metadata only—never prompts, responses, or API keys.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["provider", "model", "usage"],
+            "properties": {
+                "provider": {"type": "string", "minLength": 1, "maxLength": 64},
+                "model": {"type": "string", "minLength": 1, "maxLength": 128},
+                "task_name": {"type": "string", "maxLength": 280},
+                "request_id": {"type": "string", "maxLength": 200},
+                "usage": {
+                    "type": "object",
+                    "description": "The response usage object; accepts input/output or prompt/completion token field names.",
+                    "additionalProperties": True,
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_api_usage_history",
+        "description": "Read locally recorded API token usage across OpenAI, DeepSeek, and other providers.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_task_usage_history",
+        "description": "Read per-task Codex token totals with local user-facing conversation names. Never returns message bodies.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -138,6 +181,24 @@ class MCPServer:
                 list(arguments["thresholds"]),
                 int(arguments["reset_warning_minutes"]),
             )
+        if name == "record_api_usage":
+            return self.monitor.store.save_api_usage(arguments)
+        if name == "get_api_usage_history":
+            days = max(1, min(365, int(arguments.get("days", 30))))
+            limit = max(1, min(2000, int(arguments.get("limit", 200))))
+            rows = self.monitor.store.api_usage_history(days, limit)
+            return {
+                "days": days,
+                "records": rows,
+                "totalTokens": sum(row["total_tokens"] for row in rows),
+            }
+        if name == "get_task_usage_history":
+            limit = max(1, min(1000, int(arguments.get("limit", 100))))
+            rows = self.monitor.store.codex_task_history(limit)
+            return {
+                "records": rows,
+                "totalTokens": sum(row["tokens"] for row in rows),
+            }
         raise ValueError(f"Unknown tool: {name}")
 
     def handle(self, message: dict[str, Any]) -> None:
@@ -150,8 +211,8 @@ class MCPServer:
                 {
                     "protocolVersion": requested or "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "token-usage-monitor", "version": "0.1.0"},
-                    "instructions": "Read-only local Codex token and rate-limit monitoring. Never consumes reset credits.",
+                    "serverInfo": {"name": "token-usage-monitor", "version": "1.1.0"},
+                    "instructions": "Local Codex task, OpenAI-compatible API token, and rate-limit monitoring. Never stores prompts, responses, or API keys and never consumes reset credits.",
                 },
             )
         elif method in ("notifications/initialized", "initialized"):

@@ -64,6 +64,37 @@ class UsageStoreTests(unittest.TestCase):
         self.assertIn("thr_test", rendered)
         self.assertNotIn("prompt", rendered.lower())
 
+    def test_multi_provider_api_usage_round_trip_and_deduplication(self):
+        result = self.store.save_api_usage(
+            {
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "task_name": "测试 API 任务",
+                "request_id": "req-1",
+                "usage": {
+                    "prompt_tokens": 120,
+                    "prompt_cache_hit_tokens": 40,
+                    "completion_tokens": 30,
+                    "total_tokens": 150,
+                },
+            }
+        )
+        self.assertTrue(result["recorded"])
+        self.assertEqual(result["cachedInputTokens"], 40)
+        duplicate = self.store.save_api_usage(
+            {
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "request_id": "req-1",
+                "usage": {"prompt_tokens": 120, "completion_tokens": 30, "total_tokens": 150},
+            }
+        )
+        self.assertFalse(duplicate["recorded"])
+        rows = self.store.api_usage_history(30, 10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["task_name"], "测试 API 任务")
+        self.assertEqual(rows[0]["total_tokens"], 150)
+
 
 class AlertConfigurationTests(unittest.TestCase):
     def test_configuration_is_validated(self):

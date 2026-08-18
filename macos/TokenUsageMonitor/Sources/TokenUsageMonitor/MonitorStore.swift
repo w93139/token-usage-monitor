@@ -4,6 +4,9 @@ import UserNotifications
 
 final class MonitorStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot
+    @Published private(set) var taskRecords: [TaskUsageRecord]
+    @Published private(set) var apiRecords: [APIUsageRecord] = []
+    @Published private(set) var apiMonitorAvailable = false
     @Published private(set) var connectionState: MonitorConnectionState = .starting
     @Published private(set) var lastError: String?
     @Published private(set) var isRefreshing = false
@@ -28,9 +31,12 @@ final class MonitorStore: ObservableObject {
     private let worker = DispatchQueue(label: "token-monitor.collector", qos: .utility)
     private let workerKey = DispatchSpecificKey<Bool>()
     private var timer: DispatchSourceTimer?
+    private var taskTimer: DispatchSourceTimer?
     private var client: AppServerClient?
+    private var apiServerProcess: Process?
     private let dataDirectory: URL
     private let snapshotURL: URL
+    private let taskRecordsURL: URL
     private let notificationDelegate = NotificationDelegate()
     private var stopped = false
     private var terminationObserver: NSObjectProtocol?
@@ -39,6 +45,7 @@ final class MonitorStore: ObservableObject {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         dataDirectory = support.appendingPathComponent("Token Usage Monitor", isDirectory: true)
         snapshotURL = dataDirectory.appendingPathComponent("menu-snapshot.json")
+        taskRecordsURL = dataDirectory.appendingPathComponent("task-usage.json")
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dataDirectory.path)
 
@@ -47,6 +54,12 @@ final class MonitorStore: ObservableObject {
             snapshot = saved
         } else {
             snapshot = .empty
+        }
+        if let data = try? Data(contentsOf: taskRecordsURL),
+           let saved = try? JSONDecoder().decode([TaskUsageRecord].self, from: data) {
+            taskRecords = saved
+        } else {
+            taskRecords = []
         }
         notificationsEnabled = defaults.object(forKey: Keys.notificationsEnabled) as? Bool ?? true
         thresholdText = defaults.string(forKey: Keys.thresholds) ?? "80, 95, 100"
@@ -92,19 +105,32 @@ final class MonitorStore: ObservableObject {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
         let timer = DispatchSource.makeTimerSource(queue: worker)
-        timer.schedule(deadline: .now(), repeating: 60)
+        timer.schedule(deadline: .now(), repeating: 30)
         timer.setEventHandler { [weak self] in self?.collect() }
         self.timer = timer
         timer.resume()
+
+        let taskTimer = DispatchSource.makeTimerSource(queue: worker)
+        taskTimer.schedule(deadline: .now(), repeating: 5)
+        taskTimer.setEventHandler { [weak self] in self?.collectTasks() }
+        self.taskTimer = taskTimer
+        taskTimer.resume()
+        worker.async { [weak self] in self?.startAPIUsageServer() }
     }
 
     func stop() {
         stopped = true
         timer?.cancel()
         timer = nil
+        taskTimer?.cancel()
+        taskTimer = nil
         let closeClient = { [weak self] in
             self?.client?.close()
             self?.client = nil
+            if let process = self?.apiServerProcess, process.isRunning {
+                process.terminate()
+            }
+            self?.apiServerProcess = nil
         }
         if DispatchQueue.getSpecific(key: workerKey) == true { closeClient() }
         else { worker.sync(execute: closeClient) }
@@ -113,7 +139,10 @@ final class MonitorStore: ObservableObject {
 
     func refresh() {
         DispatchQueue.main.async { self.isRefreshing = true }
-        worker.async { [weak self] in self?.collect(forceReconnect: false) }
+        worker.async { [weak self] in
+            self?.collectTasks()
+            self?.collect(forceReconnect: false)
+        }
     }
 
     func updateNotificationPermissionIfNeeded() {
@@ -172,6 +201,182 @@ final class MonitorStore: ObservableObject {
                 self.connectionState = .retrying(error.localizedDescription)
             }
         }
+    }
+
+    private func collectTasks() {
+        guard !stopped else { return }
+        do {
+            let records = try readTaskRecords()
+            persistTaskRecords(records)
+            let apiRecords = readAPIUsageRecords()
+            DispatchQueue.main.async {
+                self.taskRecords = records
+                self.apiRecords = apiRecords
+            }
+        } catch {
+            // Task history is an enhancement. Quota monitoring continues if the
+            // local Codex state database is temporarily busy or unavailable.
+        }
+    }
+
+    private func startAPIUsageServer() {
+        guard apiServerProcess == nil else { return }
+        guard let resources = Bundle.main.resourceURL else { return }
+        let serverScript = resources.appendingPathComponent("api_usage_server.py")
+        guard FileManager.default.fileExists(atPath: serverScript.path) else { return }
+
+        let pythonCandidates = [
+            "/usr/bin/python3",
+            "/opt/homebrew/bin/python3",
+            "/usr/local/bin/python3"
+        ]
+        guard let python = pythonCandidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            DispatchQueue.main.async { self.apiMonitorAvailable = false }
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = [serverScript.path, "--port", "47821"]
+        process.currentDirectoryURL = resources
+        var environment = ProcessInfo.processInfo.environment
+        environment["TOKEN_USAGE_MONITOR_HOME"] = dataDirectory.path
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice
+        if let log = try? FileHandle(forWritingTo: dataDirectory.appendingPathComponent("api-monitor.log")) {
+            _ = try? log.seekToEnd()
+            process.standardError = log
+        } else {
+            process.standardError = FileHandle.nullDevice
+        }
+        do {
+            try process.run()
+            apiServerProcess = process
+            DispatchQueue.main.async { self.apiMonitorAvailable = true }
+        } catch {
+            DispatchQueue.main.async { self.apiMonitorAvailable = false }
+        }
+    }
+
+    private func readAPIUsageRecords() -> [APIUsageRecord] {
+        let database = dataDirectory.appendingPathComponent("usage.sqlite3")
+        guard FileManager.default.fileExists(atPath: database.path) else { return [] }
+        let query = """
+        SELECT id, captured_at AS capturedAt, provider, model, task_name AS taskName,
+               input_tokens AS inputTokens, cached_input_tokens AS cachedInputTokens,
+               output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens,
+               total_tokens AS totalTokens
+        FROM api_usage ORDER BY captured_at DESC, id DESC LIMIT 100;
+        """
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-readonly", "-json", database.path, query]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return [] }
+            guard !data.isEmpty,
+                  let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+            return rows.compactMap { row in
+                guard let id = row.integer("id"),
+                      let capturedAt = row.integer("capturedAt"),
+                      let provider = row.string("provider"),
+                      let model = row.string("model") else { return nil }
+                return APIUsageRecord(
+                    id: id,
+                    capturedAt: Date(timeIntervalSince1970: TimeInterval(capturedAt)),
+                    provider: provider,
+                    model: model,
+                    taskName: row.string("taskName"),
+                    inputTokens: row.integer("inputTokens") ?? 0,
+                    cachedInputTokens: row.integer("cachedInputTokens") ?? 0,
+                    outputTokens: row.integer("outputTokens") ?? 0,
+                    reasoningTokens: row.integer("reasoningTokens") ?? 0,
+                    totalTokens: row.integer("totalTokens") ?? 0
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
+    private func readTaskRecords() throws -> [TaskUsageRecord] {
+        let codexDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
+        let preferred = codexDirectory.appendingPathComponent("state_5.sqlite")
+        let databaseURL: URL
+        if FileManager.default.fileExists(atPath: preferred.path) {
+            databaseURL = preferred
+        } else {
+            let candidates = (try? FileManager.default.contentsOfDirectory(
+                at: codexDirectory,
+                includingPropertiesForKeys: nil
+            ))?.filter { $0.lastPathComponent.hasPrefix("state_") && $0.pathExtension == "sqlite" } ?? []
+            guard let newest = candidates.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }).first else {
+                return []
+            }
+            databaseURL = newest
+        }
+
+        let query = """
+        SELECT id,
+               SUBSTR(COALESCE(NULLIF(TRIM(name), ''), NULLIF(TRIM(title), ''), '未命名任务'), 1, 280) AS title,
+               tokens_used AS tokens,
+               created_at AS createdAt,
+               updated_at AS updatedAt,
+               NULLIF(model, '') AS model,
+               archived
+        FROM threads
+        WHERE tokens_used > 0
+          AND thread_source = 'user'
+          AND agent_role IS NULL
+          AND id NOT IN (SELECT child_thread_id FROM thread_spawn_edges)
+        ORDER BY updated_at DESC
+        LIMIT 100;
+        """
+        let process = Process()
+        let output = Pipe()
+        let errors = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-readonly", "-json", databaseURL.path, query]
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errors.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let message = String(data: errorData, encoding: .utf8)
+            throw MonitorError.server(message ?? "无法读取本地任务用量")
+        }
+        guard !data.isEmpty else { return [] }
+        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw MonitorError.invalidResponse
+        }
+        return rows.compactMap { row in
+            guard let id = row.string("id"),
+                  let title = row.string("title"),
+                  let tokens = row.integer("tokens"),
+                  let createdAt = row.integer("createdAt"),
+                  let updatedAt = row.integer("updatedAt") else { return nil }
+            return TaskUsageRecord(
+                id: id,
+                title: title,
+                tokens: tokens,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(createdAt)),
+                updatedAt: Date(timeIntervalSince1970: TimeInterval(updatedAt)),
+                model: row.string("model"),
+                archived: (row.integer("archived") ?? 0) != 0
+            )
+        }
+    }
+
+    private func persistTaskRecords(_ records: [TaskUsageRecord]) {
+        guard let data = try? JSONEncoder().encode(records) else { return }
+        try? data.write(to: taskRecordsURL, options: .atomic)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: taskRecordsURL.path)
     }
 
     private func parseSnapshot(usage: [String: Any], limits: [String: Any]) -> UsageSnapshot {
