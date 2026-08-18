@@ -1,6 +1,6 @@
 {
   "name": "token-usage-monitor",
-  "version": "0.1.0+codex.20260818190159",
+  "version": "0.1.0+codex.20260818190305",
   "description": "Track Codex token activity and rate-limit resets locally in real time.",
   "author": {
     "name": "Local developer"
