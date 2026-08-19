@@ -116,24 +116,29 @@ struct MonitorPanel: View {
 
     private func rateCard(_ window: RateWindow) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(window.displayName).font(.subheadline.weight(.semibold))
-                if window.limitID != "codex" {
-                    Text("模型专属").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Color.blue.opacity(0.12), in: Capsule())
-                } else if window.windowName == "secondary" {
-                    Text("次级").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(.secondary.opacity(0.12), in: Capsule())
+            HStack(alignment: .center) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(window.displayName).font(.subheadline.weight(.semibold))
+                    if window.limitID != "codex" {
+                        Text("模型专属").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.12), in: Capsule())
+                    } else if window.windowName == "secondary" {
+                        Text("次级").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
+                            .background(.secondary.opacity(0.12), in: Capsule())
+                    }
                 }
                 Spacer()
-                Text("剩余 \(Int(window.remainingPercent.rounded()))%")
-                    .font(.title2.monospacedDigit().weight(.bold))
-                    .foregroundStyle(remainingColor(window.remainingPercent))
+                RemainingRing(
+                    remainingPercent: window.remainingPercent,
+                    size: 58,
+                    lineWidth: 5,
+                    fontSize: 13
+                )
             }
             ProgressView(value: window.remainingPercent, total: 100)
                 .tint(remainingColor(window.remainingPercent))
             HStack {
-                Text(remainingDescription(window.remainingPercent))
+                Text("已使用 \(Int(window.usedPercent.rounded()))%")
                 Spacer()
                 if let reset = window.resetsAt {
                     Text("刷新 ") + Text(reset, style: .relative)
@@ -372,12 +377,6 @@ struct MonitorPanel: View {
         if value <= 5 { return .red }
         if value <= 20 { return .orange }
         return .accentColor
-    }
-
-    private func remainingDescription(_ value: Double) -> String {
-        if value <= 5 { return "余量即将耗尽" }
-        if value <= 20 { return "余量偏低" }
-        return "余量充足"
     }
 
     private var appLogo: NSImage? {

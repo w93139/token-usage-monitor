@@ -8,11 +8,13 @@ struct TokenUsageMonitorApp: App {
         MenuBarExtra {
             MonitorPanel(monitor: monitor)
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "gauge.with.dots.needle.67percent")
-                Text(monitor.menuTitle).monospacedDigit()
-            }
-            .help("Codex Token 用量")
+            RemainingRing(
+                remainingPercent: monitor.primaryWindow?.remainingPercent,
+                size: 21,
+                lineWidth: 1.8,
+                fontSize: 6.5
+            )
+            .help("Codex 剩余额度")
         }
         .menuBarExtraStyle(.window)
     }

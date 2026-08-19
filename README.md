@@ -7,11 +7,11 @@ The repository also includes a native macOS 13+ menu-bar app in
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
-Version 1.2 adds the product Logo throughout the macOS app, displays quotas as
-remaining percentages, prefers the Codex runtime bundled with ChatGPT, and
-keeps the last successful quota snapshot during transient network failures.
-It also includes five-second per-task tracking with local conversation names
-and provider-neutral API usage ingestion for OpenAI-compatible models.
+Version 1.3 adds a live circular remaining-quota indicator to the menu bar and
+quota cards. The white arc is the remaining allowance, the consumed portion is
+left blank, and each card also shows the exact consumed percentage. The app
+prefers the Codex runtime bundled with ChatGPT and keeps the last successful
+quota snapshot during transient network failures.
 
 ## macOS menu-bar app
 
@@ -23,7 +23,7 @@ cd macos/TokenUsageMonitor
 open 'dist/Token Usage Monitor.app'
 ```
 
-The menu bar shows the current remaining-quota percentage. Click it to view all quota
+The menu bar shows the current remaining-quota percentage inside a live ring. Click it to view all quota
 windows, reset countdowns, a 14-day activity chart, alert settings, manual
 refresh, and the launch-at-login option. The local build is ad-hoc signed;
 Developer ID signing and Apple notarization are required before distributing a
@@ -74,7 +74,10 @@ portable default.
 
 ## Runtime behavior
 
-The MCP server starts a background collector while the plugin is active. It first tries the shared Codex App Server daemon through `codex app-server proxy`, then falls back to a standalone read-only App Server connection. Data is stored in:
+The MCP server starts a background collector while the plugin is active. The
+macOS app prefers the Codex runtime bundled with ChatGPT, uses the shared App
+Server only when its control socket exists, and otherwise opens a standalone
+read-only connection. Data is stored in:
 
 - macOS: `~/Library/Application Support/Token Usage Monitor/usage.sqlite3`
 - Linux: `${XDG_DATA_HOME:-~/.local/share}/token-usage-monitor/usage.sqlite3`
@@ -100,3 +103,7 @@ Use the `configure_usage_alerts` tool to change these settings. Set `TOKEN_USAGE
 ```bash
 python3 -m unittest discover -s scripts/tests -v
 ```
+
+## License
+
+Released under the [MIT License](LICENSE).
