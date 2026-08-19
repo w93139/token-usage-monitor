@@ -7,7 +7,9 @@ The repository also includes a native macOS 13+ menu-bar app in
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
-Version 1.3 adds a live circular remaining-quota indicator to the menu bar and
+Version 1.4 adds mouse-hover inspection to the recent-usage chart, showing the
+exact date and Token count while highlighting the selected bar. Version 1.3
+added a live circular remaining-quota indicator to the menu bar and
 quota cards. The white arc is the remaining allowance, the consumed portion is
 left blank, and each card also shows the exact consumed percentage. The app
 prefers the Codex runtime bundled with ChatGPT and keeps the last successful

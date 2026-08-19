@@ -7,6 +7,7 @@ struct MonitorPanel: View {
     @ObservedObject var monitor: MonitorStore
     @State private var showsSettings = false
     @State private var showsSupplementalLimits = false
+    @State private var hoveredDailyUsage: DailyUsage?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -179,11 +180,29 @@ struct MonitorPanel: View {
     }
 
     private var historyChart: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("最近用量").font(.subheadline.weight(.semibold))
-            Chart(Array(monitor.snapshot.dailyUsage.suffix(14))) { item in
+        let recentUsage = Array(monitor.snapshot.dailyUsage.suffix(14))
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("最近用量").font(.subheadline.weight(.semibold))
+                Spacer()
+                if let hoveredDailyUsage {
+                    Text("\(hoveredDailyUsage.date) · \(hoveredDailyUsage.tokens.formatted()) tokens")
+                        .font(.caption2.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.primary)
+                        .transition(.opacity)
+                } else {
+                    Text("悬停柱状图查看")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Chart(recentUsage) { item in
                 BarMark(x: .value("日期", item.date), y: .value("Token", item.tokens))
-                    .foregroundStyle(Color.accentColor.gradient)
+                    .foregroundStyle(
+                        hoveredDailyUsage == nil || hoveredDailyUsage?.id == item.id
+                            ? Color.accentColor
+                            : Color.accentColor.opacity(0.28)
+                    )
                     .cornerRadius(2)
             }
             .chartXAxis(.hidden)
@@ -195,7 +214,33 @@ struct MonitorPanel: View {
                     }
                 }
             }
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle()
+                        .fill(.clear)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active(let location):
+                                let plotFrame = geometry[proxy.plotAreaFrame]
+                                guard plotFrame.contains(location) else {
+                                    hoveredDailyUsage = nil
+                                    return
+                                }
+                                let x = location.x - plotFrame.origin.x
+                                guard let date: String = proxy.value(atX: x) else {
+                                    hoveredDailyUsage = nil
+                                    return
+                                }
+                                hoveredDailyUsage = recentUsage.first(where: { $0.date == date })
+                            case .ended:
+                                hoveredDailyUsage = nil
+                            }
+                        }
+                }
+            }
             .frame(height: 105)
+            .animation(.easeOut(duration: 0.12), value: hoveredDailyUsage?.id)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))

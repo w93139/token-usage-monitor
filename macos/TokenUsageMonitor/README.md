@@ -10,6 +10,7 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 - Cached quota fallback with a friendly automatic-retry status during network interruptions
 - Product Logo in the panel and macOS application icon
 - Daily token chart and account summary
+- Mouse-hover details with exact date and Token count on the recent-usage chart
 - Local notifications at configurable thresholds
 - Detection of scheduled resets and newly granted reset credits
 - Manual refresh, local-only storage, and optional launch at login
