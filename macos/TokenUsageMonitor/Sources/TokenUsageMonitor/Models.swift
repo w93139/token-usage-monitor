@@ -58,6 +58,10 @@ struct RateWindow: Codable, Identifiable, Equatable {
 
     var id: String { "\(limitID)-\(windowName)" }
 
+    var remainingPercent: Double {
+        min(100, max(0, 100 - usedPercent))
+    }
+
     var displayName: String {
         if let limitName, !limitName.isEmpty { return limitName }
         if limitID == "codex" { return windowName == "primary" ? "Codex 周额度" : "Codex 次级额度" }
@@ -84,6 +88,7 @@ struct UsageSnapshot: Codable, Equatable {
 enum MonitorConnectionState: Equatable {
     case starting
     case connected(String)
+    case cached
     case retrying(String)
     case stopped
 
@@ -91,6 +96,7 @@ enum MonitorConnectionState: Equatable {
         switch self {
         case .starting: return "正在连接"
         case .connected: return "实时监控中"
+        case .cached: return "显示缓存额度"
         case .retrying: return "等待重连"
         case .stopped: return "已停止"
         }

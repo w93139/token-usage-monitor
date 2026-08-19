@@ -31,6 +31,7 @@ install -m 644 "$project_dir/../../scripts/api_usage_server.py" "$app_path/Conte
 
 icon_source="$project_dir/Assets/AppIcon-master.png"
 if [[ -f "$icon_source" ]]; then
+  install -m 644 "$icon_source" "$app_path/Contents/Resources/AppLogo.png"
   iconset="$build_dir/AppIcon.iconset"
   mkdir -p "$iconset"
   sips -z 16 16 "$icon_source" --out "$iconset/icon_16x16.png" >/dev/null

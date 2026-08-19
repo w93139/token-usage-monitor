@@ -23,10 +23,14 @@ final class AppServerClient {
     func connect() throws -> String {
         guard let codex = Self.findCodexBinary() else { throw MonitorError.codexNotFound }
         var failures: [String] = []
-        for candidate in [
-            ("daemon proxy", ["app-server", "proxy"]),
-            ("独立连接", ["app-server", "--stdio"])
-        ] {
+        var candidates: [(String, [String])] = []
+        let controlSocket = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/app-server-control/app-server-control.sock")
+        if FileManager.default.fileExists(atPath: controlSocket.path) {
+            candidates.append(("桌面连接", ["app-server", "proxy"]))
+        }
+        candidates.append(("独立连接", ["app-server", "--stdio"]))
+        for candidate in candidates {
             do {
                 try spawn(executable: codex, arguments: candidate.1)
                 _ = try request(
@@ -34,7 +38,7 @@ final class AppServerClient {
                     params: ["clientInfo": [
                         "name": "token_usage_monitor_macos",
                         "title": "Token Usage Monitor",
-                        "version": "1.0.0"
+                        "version": "1.2.0"
                     ]],
                     timeout: 12
                 )
@@ -191,8 +195,15 @@ final class AppServerClient {
         if let override = environment["CODEX_BINARY"], FileManager.default.isExecutableFile(atPath: override) {
             return override
         }
-        var candidates = ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"]
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var candidates = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex",
+            "\(home)/Applications/ChatGPT.app/Contents/Resources/codex",
+            "/Applications/Codex.app/Contents/Resources/codex",
+            "\(home)/Applications/Codex.app/Contents/Resources/codex",
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
+        ]
         let nvmRoot = "\(home)/.nvm/versions/node"
         if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmRoot) {
             candidates.append(contentsOf: versions.sorted().reversed().map { "\(nvmRoot)/\($0)/bin/codex" })

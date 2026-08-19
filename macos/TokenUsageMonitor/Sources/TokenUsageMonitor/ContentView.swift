@@ -24,13 +24,16 @@ struct MonitorPanel: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.accentColor.gradient)
-                    .frame(width: 38, height: 38)
+            if let logo = appLogo {
+                Image(nsImage: logo)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+                    .frame(width: 40, height: 40)
+            } else {
                 Image(systemName: "gauge.with.dots.needle.67percent")
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .font(.system(size: 22, weight: .semibold))
+                    .frame(width: 40, height: 40)
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("Token Usage Monitor").font(.headline)
@@ -123,14 +126,14 @@ struct MonitorPanel: View {
                         .background(.secondary.opacity(0.12), in: Capsule())
                 }
                 Spacer()
-                Text("\(Int(window.usedPercent.rounded()))%")
+                Text("剩余 \(Int(window.remainingPercent.rounded()))%")
                     .font(.title2.monospacedDigit().weight(.bold))
-                    .foregroundStyle(progressColor(window.usedPercent))
+                    .foregroundStyle(remainingColor(window.remainingPercent))
             }
-            ProgressView(value: min(window.usedPercent, 100), total: 100)
-                .tint(progressColor(window.usedPercent))
+            ProgressView(value: window.remainingPercent, total: 100)
+                .tint(remainingColor(window.remainingPercent))
             HStack {
-                Text("剩余 \(Int(max(0, 100 - window.usedPercent).rounded()))%")
+                Text(remainingDescription(window.remainingPercent))
                 Spacer()
                 if let reset = window.resetsAt {
                     Text("刷新 ") + Text(reset, style: .relative)
@@ -285,9 +288,9 @@ struct MonitorPanel: View {
                 Toggle("系统通知", isOn: $monitor.notificationsEnabled)
                     .onChange(of: monitor.notificationsEnabled) { _ in monitor.updateNotificationPermissionIfNeeded() }
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("用量阈值").font(.subheadline)
-                    TextField("80, 95, 100", text: $monitor.thresholdText).textFieldStyle(.roundedBorder)
-                    Text("使用逗号分隔，范围为 1–100").font(.caption).foregroundStyle(.secondary)
+                    Text("低余量提醒").font(.subheadline)
+                    TextField("20, 5, 0", text: $monitor.thresholdText).textFieldStyle(.roundedBorder)
+                    Text("剩余比例降到这些数值时提醒，以逗号分隔").font(.caption).foregroundStyle(.secondary)
                 }
                 Stepper("刷新前提醒：\(monitor.resetWarningMinutes) 分钟", value: $monitor.resetWarningMinutes, in: 5...240, step: 5)
             }
@@ -365,10 +368,21 @@ struct MonitorPanel: View {
         .padding(.vertical, 10)
     }
 
-    private func progressColor(_ value: Double) -> Color {
-        if value >= 95 { return .red }
-        if value >= 80 { return .orange }
+    private func remainingColor(_ value: Double) -> Color {
+        if value <= 5 { return .red }
+        if value <= 20 { return .orange }
         return .accentColor
+    }
+
+    private func remainingDescription(_ value: Double) -> String {
+        if value <= 5 { return "余量即将耗尽" }
+        if value <= 20 { return "余量偏低" }
+        return "余量充足"
+    }
+
+    private var appLogo: NSImage? {
+        guard let url = Bundle.main.url(forResource: "AppLogo", withExtension: "png") else { return nil }
+        return NSImage(contentsOf: url)
     }
 
     private func compact(_ number: Int?) -> String {

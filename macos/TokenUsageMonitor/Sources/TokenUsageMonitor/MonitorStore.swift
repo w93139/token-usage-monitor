@@ -22,7 +22,7 @@ final class MonitorStore: ObservableObject {
 
     private enum Keys {
         static let notificationsEnabled = "notifications.enabled"
-        static let thresholds = "notifications.thresholds"
+        static let thresholds = "notifications.remainingThresholds"
         static let resetWarningMinutes = "notifications.resetWarningMinutes"
         static let notifiedResetPrefix = "monitor.notifiedReset."
     }
@@ -34,6 +34,7 @@ final class MonitorStore: ObservableObject {
     private var taskTimer: DispatchSourceTimer?
     private var client: AppServerClient?
     private var apiServerProcess: Process?
+    private var consecutiveQuotaFailures = 0
     private let dataDirectory: URL
     private let snapshotURL: URL
     private let taskRecordsURL: URL
@@ -62,7 +63,7 @@ final class MonitorStore: ObservableObject {
             taskRecords = []
         }
         notificationsEnabled = defaults.object(forKey: Keys.notificationsEnabled) as? Bool ?? true
-        thresholdText = defaults.string(forKey: Keys.thresholds) ?? "80, 95, 100"
+        thresholdText = defaults.string(forKey: Keys.thresholds) ?? "20, 5, 0"
         let storedWarning = defaults.integer(forKey: Keys.resetWarningMinutes)
         resetWarningMinutes = storedWarning == 0 ? 30 : storedWarning
         worker.setSpecific(key: workerKey, value: true)
@@ -86,16 +87,16 @@ final class MonitorStore: ObservableObject {
     }
 
     var menuTitle: String {
-        guard let used = primaryWindow?.usedPercent else { return "--%" }
-        return "\(Int(used.rounded()))%"
+        guard let remaining = primaryWindow?.remainingPercent else { return "--%" }
+        return "\(Int(remaining.rounded()))%"
     }
 
     var thresholds: [Int] {
         let parsed = thresholdText
             .split(whereSeparator: { $0 == "," || $0 == "，" || $0 == " " })
             .compactMap { Int($0) }
-            .filter { (1...100).contains($0) }
-        return Array(Set(parsed)).sorted()
+            .filter { (0...99).contains($0) }
+        return Array(Set(parsed)).sorted(by: >)
     }
 
     func start() {
@@ -175,32 +176,71 @@ final class MonitorStore: ObservableObject {
             var usage: [String: Any] = [:]
             var limits: [String: Any] = [:]
             var usageError: Error?
-            do { usage = try client.request(method: "account/usage/read") } catch { usageError = error }
-            do { limits = try client.request(method: "account/rateLimits/read") } catch {
-                if let usageError { throw MonitorError.server("\(usageError.localizedDescription)；\(error.localizedDescription)") }
-                throw error
-            }
-            if usage.isEmpty && limits.isEmpty { throw MonitorError.invalidResponse }
+            var limitsError: Error?
+            do { limits = try client.request(method: "account/rateLimits/read", timeout: 20) } catch { limitsError = error }
+            do { usage = try client.request(method: "account/usage/read", timeout: 20) } catch { usageError = error }
 
-            let updated = parseSnapshot(usage: usage, limits: limits)
+            guard !usage.isEmpty || !limits.isEmpty else {
+                consecutiveQuotaFailures += 1
+                let shouldReconnect = [usageError, limitsError]
+                    .compactMap { $0 }
+                    .contains { self.isProcessEnded($0) }
+                if shouldReconnect {
+                    client.close()
+                    self.client = nil
+                }
+                let hasCachedQuota = !snapshot.rateWindows.isEmpty
+                DispatchQueue.main.async {
+                    self.lastError = hasCachedQuota
+                        ? "账户额度暂时无法更新，正在显示上次数据；任务 Token 记录不受影响。"
+                        : "暂时无法读取账户额度，应用会自动重试。"
+                    self.isRefreshing = false
+                    self.connectionState = hasCachedQuota ? .cached : .retrying("正在自动重试")
+                }
+                return
+            }
+
+            let updated = parseSnapshot(usage: usage, limits: limits, fallback: snapshot)
             let previous = snapshot
             persist(updated)
             evaluateAlerts(previous: previous, current: updated)
+            consecutiveQuotaFailures = 0
             DispatchQueue.main.async {
                 self.snapshot = updated
-                self.lastError = nil
+                self.lastError = limitsError == nil
+                    ? nil
+                    : "账户额度暂时无法更新，正在显示上次数据；任务 Token 记录不受影响。"
                 self.isRefreshing = false
-                self.connectionState = .connected(client.connectionMode ?? "已连接")
+                self.connectionState = limitsError == nil
+                    ? .connected(client.connectionMode ?? "已连接")
+                    : .cached
             }
         } catch {
             client?.close()
             client = nil
+            consecutiveQuotaFailures += 1
+            let hasCachedQuota = !snapshot.rateWindows.isEmpty
             DispatchQueue.main.async {
-                self.lastError = error.localizedDescription
+                self.lastError = hasCachedQuota
+                    ? "账户额度暂时无法更新，正在显示上次数据；任务 Token 记录不受影响。"
+                    : self.friendlyConnectionError(error)
                 self.isRefreshing = false
-                self.connectionState = .retrying(error.localizedDescription)
+                self.connectionState = hasCachedQuota ? .cached : .retrying("正在自动重试")
             }
         }
+    }
+
+    private func isProcessEnded(_ error: Error) -> Bool {
+        guard let monitorError = error as? MonitorError else { return false }
+        if case .processEnded = monitorError { return true }
+        return false
+    }
+
+    private func friendlyConnectionError(_ error: Error) -> String {
+        if let monitorError = error as? MonitorError, case .codexNotFound = monitorError {
+            return monitorError.localizedDescription
+        }
+        return "暂时无法连接 Codex 用量服务，应用会自动重试。"
     }
 
     private func collectTasks() {
@@ -379,7 +419,11 @@ final class MonitorStore: ObservableObject {
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: taskRecordsURL.path)
     }
 
-    private func parseSnapshot(usage: [String: Any], limits: [String: Any]) -> UsageSnapshot {
+    private func parseSnapshot(
+        usage: [String: Any],
+        limits: [String: Any],
+        fallback: UsageSnapshot
+    ) -> UsageSnapshot {
         let summaryObject = usage.dictionary("summary")
         let account = summaryObject.map {
             AccountSummary(
@@ -388,11 +432,12 @@ final class MonitorStore: ObservableObject {
                 currentStreakDays: $0.integer("currentStreakDays"),
                 longestStreakDays: $0.integer("longestStreakDays")
             )
-        }
-        let days = usage.array("dailyUsageBuckets").compactMap { item -> DailyUsage? in
+        } ?? fallback.account
+        let parsedDays = usage.array("dailyUsageBuckets").compactMap { item -> DailyUsage? in
             guard let date = item.string("startDate"), let tokens = item.integer("tokens") else { return nil }
             return DailyUsage(date: date, tokens: tokens)
         }.sorted { $0.date < $1.date }
+        let days = usage.isEmpty ? fallback.dailyUsage : parsedDays
 
         var windows: [RateWindow] = []
         if let groups = limits.dictionary("rateLimitsByLimitId") {
@@ -408,7 +453,10 @@ final class MonitorStore: ObservableObject {
             if $0.limitID != "codex" && $1.limitID == "codex" { return false }
             return $0.id < $1.id
         }
-        let resetCredits = limits.dictionary("rateLimitResetCredits")?.integer("availableCount") ?? 0
+        if limits.isEmpty { windows = fallback.rateWindows }
+        let resetCredits = limits.isEmpty
+            ? fallback.availableResetCredits
+            : limits.dictionary("rateLimitResetCredits")?.integer("availableCount") ?? 0
         return UsageSnapshot(
             capturedAt: Date(),
             account: account,
@@ -443,9 +491,12 @@ final class MonitorStore: ObservableObject {
         let now = Date()
         for window in current.rateWindows {
             let old = previous.rateWindows.first(where: { $0.id == window.id })
-            for threshold in thresholds where window.usedPercent >= Double(threshold) {
-                if old == nil || (old?.usedPercent ?? 0) < Double(threshold) {
-                    sendNotification(title: "Codex 用量提醒", body: "\(window.displayName)已使用 \(Int(window.usedPercent.rounded()))%")
+            for threshold in thresholds where window.remainingPercent <= Double(threshold) {
+                if old == nil || (old?.remainingPercent ?? 100) > Double(threshold) {
+                    sendNotification(
+                        title: "Codex 余量提醒",
+                        body: "\(window.displayName)剩余 \(Int(window.remainingPercent.rounded()))%"
+                    )
                 }
             }
             if let old, let oldReset = old.resetsAt, let newReset = window.resetsAt,

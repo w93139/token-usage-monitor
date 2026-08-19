@@ -4,7 +4,9 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
 ## Features
 
-- Live Codex quota percentage and reset countdown
+- Live Codex remaining-quota percentage and reset countdown
+- Cached quota fallback with a friendly automatic-retry status during network interruptions
+- Product Logo in the panel and macOS application icon
 - Daily token chart and account summary
 - Local notifications at configurable thresholds
 - Detection of scheduled resets and newly granted reset credits
@@ -20,7 +22,7 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 ```
 
 The finished app is written to `dist/Token Usage Monitor.app`. Move it to the
-Applications folder and launch it; the quota percentage will appear in the
+Applications folder and launch it; the remaining-quota percentage will appear in the
 menu bar. The app requires a local Codex CLI installation, an authenticated
 Codex session, and macOS 13 or newer.
 

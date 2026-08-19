@@ -3,13 +3,15 @@
 A local, privacy-focused Codex plugin for tracking token activity, rate-limit windows, scheduled resets, and earned reset credits.
 
 The repository also includes a native macOS 13+ menu-bar app in
-`macos/TokenUsageMonitor`. It provides a glanceable quota percentage, reset
+`macos/TokenUsageMonitor`. It provides a glanceable remaining-quota percentage, reset
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
-Version 1.1 adds a custom app icon, five-second per-task tracking with local
-conversation names, and provider-neutral API usage ingestion for OpenAI,
-DeepSeek, and other OpenAI-compatible models.
+Version 1.2 adds the product Logo throughout the macOS app, displays quotas as
+remaining percentages, prefers the Codex runtime bundled with ChatGPT, and
+keeps the last successful quota snapshot during transient network failures.
+It also includes five-second per-task tracking with local conversation names
+and provider-neutral API usage ingestion for OpenAI-compatible models.
 
 ## macOS menu-bar app
 
@@ -21,7 +23,7 @@ cd macos/TokenUsageMonitor
 open 'dist/Token Usage Monitor.app'
 ```
 
-The menu bar shows the current quota percentage. Click it to view all quota
+The menu bar shows the current remaining-quota percentage. Click it to view all quota
 windows, reset countdowns, a 14-day activity chart, alert settings, manual
 refresh, and the launch-at-login option. The local build is ad-hoc signed;
 Developer ID signing and Apple notarization are required before distributing a
