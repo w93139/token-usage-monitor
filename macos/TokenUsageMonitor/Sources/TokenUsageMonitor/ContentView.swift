@@ -5,7 +5,7 @@ import SwiftUI
 
 struct MonitorPanel: View {
     @ObservedObject var monitor: MonitorStore
-    @ObservedObject var pinController: PinnedPanelController
+    @ObservedObject var presentationController: AppPresentationController
     @State private var showsSettings = false
     @State private var showsSupplementalLimits = false
     @State private var hoveredDailyUsage: DailyUsage?
@@ -20,7 +20,7 @@ struct MonitorPanel: View {
             Divider()
             footer
         }
-        .frame(width: 370, height: 540)
+        .frame(minWidth: 390, idealWidth: 420, minHeight: 540, idealHeight: 640)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
@@ -49,19 +49,22 @@ struct MonitorPanel: View {
                 }
             }
             Spacer()
-            Button { pinController.toggle(monitor: monitor) } label: {
-                Image(systemName: pinController.isPinned ? "pin.fill" : "pin")
+            Button { presentationController.toggleQuotaBadge(monitor: monitor) } label: {
+                Image(systemName: presentationController.isQuotaBadgePinned ? "pin.fill" : "pin")
+                    .frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(pinController.isPinned ? Color.accentColor : Color.primary)
-            .help(pinController.isPinned ? "取消置顶" : "固定在所有窗口上方")
+            .buttonStyle(.borderless)
+            .foregroundStyle(presentationController.isQuotaBadgePinned ? Color.accentColor : Color.primary)
+            .help(presentationController.isQuotaBadgePinned ? "隐藏顶部余量浮标" : "固定余量数字到屏幕顶部")
             Button { showsSettings.toggle() } label: {
                 Image(systemName: showsSettings ? "xmark" : "gearshape")
+                    .frame(width: 20, height: 20)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .help(showsSettings ? "返回" : "设置")
         }
-        .padding(14)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
     }
 
     private var dashboard: some View {

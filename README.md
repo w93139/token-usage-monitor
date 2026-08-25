@@ -10,7 +10,7 @@
 ## 下载与安装
 
 1. 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest)
-   下载 `Token-Monitor-macOS-arm64-v1.5.2.zip`。
+   下载 `Token-Monitor-macOS-arm64-v1.6.0.zip`。
 2. 解压后将 `Token监测.app` 移入“应用程序”文件夹并启动。
 3. 首次启动若被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
 
@@ -24,7 +24,7 @@
 - OpenAI/DeepSeek 兼容 API 的输入、输出、缓存和推理 Token 记录
 - 可配置 API Token 总额度，并显示已用量、余量和剩余百分比
 - 14 天最近用量图、悬停详情、额度刷新倒计时和本地通知
-- 启动自动展开、窗口置顶、登录启动和 GitHub Release 自动检查
+- 启动自动展开、顶部余量浮标、登录启动和 GitHub Release 自动检查
 - 本地 SQLite 存储，监听端点仅绑定 `127.0.0.1`
 
 The repository also includes a native macOS 13+ menu-bar app in
@@ -32,11 +32,13 @@ The repository also includes a native macOS 13+ menu-bar app in
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
-Version 1.5 introduces the Chinese product name Token监测, a black graphite app
-icon, automatic GitHub release checks, and an in-app update link. It opens
-the monitor panel when the app launches and adds a pin control
-that keeps it above other windows across macOS Spaces. Click the filled pin
-again to return the open panel to normal window layering. The recent-usage chart
+Version 1.6 adopts a standard resizable macOS window, a 1024×1024 app icon with
+true transparent margins, and a dedicated always-front quota badge. The pin
+control now keeps only the selected remaining-quota number visible near the top
+of the screen; the main window retains normal window layering. macOS controls
+the ordering of menu-bar status items, so the badge provides a stable public-API
+alternative when the status item would otherwise be hidden. Version 1.5 added
+the Chinese product name Token监测, update checks, and launch-time opening. The recent-usage chart
 also adds readable date ticks, a 14-day total, and a hover guide. Version 1.4 added
 mouse-hover inspection to the recent-usage chart, showing the exact date and
 Token count while highlighting the selected bar. Version 1.3
@@ -56,10 +58,11 @@ cd macos/TokenUsageMonitor
 open 'dist/Token监测.app'
 ```
 
-The menu bar shows the current remaining-quota percentage inside a live ring. Click it to view all quota
+The menu bar shows the current remaining-quota percentage. Click it to view all quota
 windows, reset countdowns, a 14-day activity chart, alert settings, manual
 refresh, and the launch-at-login option. Use the pin button in the panel header
-to keep the panel above other windows. Automatic update checks are enabled by
+to keep a compact quota badge above other windows while leaving the main window
+at its normal level. Automatic update checks are enabled by
 default and can be disabled in Settings; update links open the public GitHub
 release page. The local build is ad-hoc signed;
 Developer ID signing and Apple notarization are required before distributing a

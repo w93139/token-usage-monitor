@@ -2,6 +2,20 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.6.0] - 2026-08-25
+
+### Changed
+
+- Rebuilt the app presentation around a standard 420×640 resizable macOS window with a 390×540 minimum size.
+- Changed the pin action to show a compact, always-front quota badge instead of raising the entire app window.
+- Simplified the menu-bar label for better legibility under limited menu-bar space.
+- Normalized the graphite app icon to a 1024×1024 RGBA asset with transparent safe margins.
+
+### Fixed
+
+- The main app window no longer remains above unrelated applications after pinning quota visibility.
+- Removed the opaque square canvas that made the application icon appear oversized in macOS launch surfaces.
+
 ## [1.5.2] - 2026-08-25
 
 ### Added

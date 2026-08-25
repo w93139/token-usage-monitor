@@ -3,20 +3,17 @@ import SwiftUI
 @main
 struct TokenUsageMonitorApp: App {
     @StateObject private var monitor = MonitorStore()
-    @StateObject private var pinController = PinnedPanelController()
+    @StateObject private var presentationController = AppPresentationController()
 
     var body: some Scene {
         MenuBarExtra {
-            MonitorPanel(monitor: monitor, pinController: pinController)
+            MonitorPanel(monitor: monitor, presentationController: presentationController)
         } label: {
-            RemainingRing(
-                remainingPercent: monitor.menuBarRemainingPercent,
-                size: 21,
-                lineWidth: 1.8,
-                fontSize: 6.5
-            )
+            Text(monitor.menuTitle)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .monospacedDigit()
             .help("\(monitor.menuQuotaSource.label) 剩余额度")
-            .onAppear { pinController.openOnLaunch(monitor: monitor) }
+            .onAppear { presentationController.openOnLaunch(monitor: monitor) }
         }
         .menuBarExtraStyle(.window)
     }
