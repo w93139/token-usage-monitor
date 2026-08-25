@@ -8,7 +8,7 @@ countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
 Version 1.5 introduces the Chinese product name Token监测, a black graphite app
-icon, automatic GitHub release checks, and an in-app download prompt. It opens
+icon, automatic GitHub release checks, and an in-app update link. It opens
 the monitor panel when the app launches and adds a pin control
 that keeps it above other windows across macOS Spaces. Click the filled pin
 again to return the open panel to normal window layering. The recent-usage chart
@@ -35,8 +35,8 @@ The menu bar shows the current remaining-quota percentage inside a live ring. Cl
 windows, reset countdowns, a 14-day activity chart, alert settings, manual
 refresh, and the launch-at-login option. Use the pin button in the panel header
 to keep the panel above other windows. Automatic update checks are enabled by
-default and can be disabled in Settings; update downloads open from the signed
-GitHub release. The local build is ad-hoc signed;
+default and can be disabled in Settings; update links open the public GitHub
+release page. The local build is ad-hoc signed;
 Developer ID signing and Apple notarization are required before distributing a
 download that opens without Gatekeeper review on other Macs.
 

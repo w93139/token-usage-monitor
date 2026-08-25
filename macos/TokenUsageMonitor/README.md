@@ -14,7 +14,7 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 - Automatic panel opening when the app launches
 - Header pin switch for an always-on-top panel across macOS Spaces
 - Readable date ticks, 14-day total, and hover guide in the recent-usage chart
-- Automatic GitHub release checks with an in-app download prompt
+- Automatic GitHub release checks with an in-app update link
 - Black graphite application icon with high-contrast quota ring
 - Local notifications at configurable thresholds
 - Detection of scheduled resets and newly granted reset credits

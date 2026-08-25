@@ -81,7 +81,7 @@ struct MonitorPanel: View {
                         Image(systemName: "arrow.down.circle.fill")
                         Text("发现新版本 \(update.version)")
                         Spacer()
-                        Text("下载更新")
+                        Text("查看更新")
                     }
                     .font(.caption.weight(.medium))
                     .padding(10)

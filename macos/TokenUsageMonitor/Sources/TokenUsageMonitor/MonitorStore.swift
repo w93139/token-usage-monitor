@@ -2,28 +2,6 @@ import AppKit
 import Foundation
 import UserNotifications
 
-private struct GitHubRelease: Decodable {
-    struct Asset: Decodable {
-        var name: String
-        var browserDownloadURL: String
-
-        enum CodingKeys: String, CodingKey {
-            case name
-            case browserDownloadURL = "browser_download_url"
-        }
-    }
-
-    var tagName: String
-    var htmlURL: String
-    var assets: [Asset]
-
-    enum CodingKeys: String, CodingKey {
-        case tagName = "tag_name"
-        case htmlURL = "html_url"
-        case assets
-    }
-}
-
 final class MonitorStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot
     @Published private(set) var taskRecords: [TaskUsageRecord]
@@ -248,14 +226,15 @@ final class MonitorStore: ObservableObject {
 
     func checkForUpdates() {
         guard !isCheckingForUpdates,
-              let url = URL(string: "https://api.github.com/repos/w93139/token-usage-monitor/releases/latest") else { return }
+              let url = URL(string: "https://github.com/w93139/token-usage-monitor/releases/latest") else { return }
         isCheckingForUpdates = true
         updateStatus = "正在检查更新…"
 
         var request = URLRequest(url: url)
+        request.httpMethod = "HEAD"
         request.setValue("TokenMonitor-macOS", forHTTPHeaderField: "User-Agent")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        updateCheckTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        updateCheckTask = URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.isCheckingForUpdates = false
@@ -264,19 +243,16 @@ final class MonitorStore: ObservableObject {
                     self.updateStatus = "检查失败：\(error.localizedDescription)"
                     return
                 }
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
-                      let release = try? JSONDecoder().decode(GitHubRelease.self, from: data),
-                      let pageURL = URL(string: release.htmlURL) else {
+                guard let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode),
+                      let pageURL = http.url else {
                     self.updateStatus = "暂时无法读取 GitHub 版本信息"
                     return
                 }
 
-                let remoteVersion = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+                let remoteVersion = pageURL.lastPathComponent.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
                 let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
                 if self.isVersion(remoteVersion, newerThan: currentVersion) {
-                    let download = release.assets.first(where: { $0.name.hasSuffix(".zip") })
-                        .flatMap { URL(string: $0.browserDownloadURL) }
-                    self.availableUpdate = AppUpdateInfo(version: remoteVersion, pageURL: pageURL, downloadURL: download)
+                    self.availableUpdate = AppUpdateInfo(version: remoteVersion, pageURL: pageURL, downloadURL: nil)
                     self.updateStatus = "发现新版本 \(remoteVersion)"
                 } else {
                     self.availableUpdate = nil
