@@ -226,15 +226,14 @@ final class MonitorStore: ObservableObject {
 
     func checkForUpdates() {
         guard !isCheckingForUpdates,
-              let url = URL(string: "https://github.com/w93139/token-usage-monitor/releases/latest") else { return }
+              let url = URL(string: "https://github.com/w93139/token-usage-monitor/releases.atom") else { return }
         isCheckingForUpdates = true
         updateStatus = "正在检查更新…"
 
         var request = URLRequest(url: url)
-        request.httpMethod = "HEAD"
         request.setValue("TokenMonitor-macOS", forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html", forHTTPHeaderField: "Accept")
-        updateCheckTask = URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+        request.setValue("application/atom+xml", forHTTPHeaderField: "Accept")
+        updateCheckTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.isCheckingForUpdates = false
@@ -243,8 +242,9 @@ final class MonitorStore: ObservableObject {
                     self.updateStatus = "检查失败：\(error.localizedDescription)"
                     return
                 }
-                guard let http = response as? HTTPURLResponse, (200..<400).contains(http.statusCode),
-                      let pageURL = http.url else {
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
+                      let feed = String(data: data, encoding: .utf8),
+                      let pageURL = self.firstReleaseURL(in: feed) else {
                     self.updateStatus = "暂时无法读取 GitHub 版本信息"
                     return
                 }
@@ -261,6 +261,14 @@ final class MonitorStore: ObservableObject {
             }
         }
         updateCheckTask?.resume()
+    }
+
+    private func firstReleaseURL(in feed: String) -> URL? {
+        let marker = "href=\"https://github.com/w93139/token-usage-monitor/releases/tag/"
+        guard let markerRange = feed.range(of: marker) else { return nil }
+        let remainder = feed[markerRange.upperBound...]
+        guard let end = remainder.firstIndex(of: "\"") else { return nil }
+        return URL(string: "https://github.com/w93139/token-usage-monitor/releases/tag/" + String(remainder[..<end]))
     }
 
     func openAvailableUpdate() {
