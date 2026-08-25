@@ -2,6 +2,13 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.6.2] - 2026-08-25
+
+### Fixed
+
+- Renamed the bundled icon resource so macOS refreshes the transparent app icon after an in-place update.
+- Removed the legacy icon resource from rebuilt application bundles.
+
 ## [1.6.1] - 2026-08-25
 
 ### Fixed

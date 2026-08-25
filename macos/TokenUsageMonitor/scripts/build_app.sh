@@ -8,6 +8,7 @@ app_path="$dist_dir/Token监测.app"
 binary_path="$build_dir/TokenUsageMonitor"
 
 mkdir -p "$build_dir" "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
+rm -f "$app_path/Contents/Resources/AppIcon.icns"
 
 if (cd "$project_dir" && swift build -c release >/dev/null 2>&1); then
   swift_product="$(cd "$project_dir" && swift build -c release --show-bin-path)/TokenUsageMonitor"
@@ -44,8 +45,8 @@ if [[ -f "$icon_source" ]]; then
   sips -z 512 512 "$icon_source" --out "$iconset/icon_256x256@2x.png" >/dev/null
   sips -z 512 512 "$icon_source" --out "$iconset/icon_512x512.png" >/dev/null
   sips -z 1024 1024 "$icon_source" --out "$iconset/icon_512x512@2x.png" >/dev/null
-  iconutil -c icns "$iconset" -o "$build_dir/AppIcon.icns"
-  install -m 644 "$build_dir/AppIcon.icns" "$app_path/Contents/Resources/AppIcon.icns"
+  iconutil -c icns "$iconset" -o "$build_dir/AppIcon-v2.icns"
+  install -m 644 "$build_dir/AppIcon-v2.icns" "$app_path/Contents/Resources/AppIcon-v2.icns"
 fi
 
 plutil -lint "$app_path/Contents/Info.plist" >/dev/null
