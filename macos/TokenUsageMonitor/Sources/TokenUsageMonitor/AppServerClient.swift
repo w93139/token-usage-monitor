@@ -37,7 +37,7 @@ final class AppServerClient {
                     method: "initialize",
                     params: ["clientInfo": [
                         "name": "token_usage_monitor_macos",
-                        "title": "Token Usage Monitor",
+                        "title": "Token监测",
                         "version": "1.2.0"
                     ]],
                     timeout: 12

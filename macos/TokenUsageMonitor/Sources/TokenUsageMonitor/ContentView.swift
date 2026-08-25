@@ -5,6 +5,7 @@ import SwiftUI
 
 struct MonitorPanel: View {
     @ObservedObject var monitor: MonitorStore
+    @ObservedObject var pinController: PinnedPanelController
     @State private var showsSettings = false
     @State private var showsSupplementalLimits = false
     @State private var hoveredDailyUsage: DailyUsage?
@@ -37,7 +38,7 @@ struct MonitorPanel: View {
                     .frame(width: 40, height: 40)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("Token Usage Monitor").font(.headline)
+                Text("Token监测").font(.headline)
                 HStack(spacing: 5) {
                     Circle()
                         .fill(monitor.connectionState.isConnected ? Color.green : Color.orange)
@@ -48,6 +49,12 @@ struct MonitorPanel: View {
                 }
             }
             Spacer()
+            Button { pinController.toggle(monitor: monitor) } label: {
+                Image(systemName: pinController.isPinned ? "pin.fill" : "pin")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(pinController.isPinned ? Color.accentColor : Color.primary)
+            .help(pinController.isPinned ? "取消置顶" : "固定在所有窗口上方")
             Button { showsSettings.toggle() } label: {
                 Image(systemName: showsSettings ? "xmark" : "gearshape")
             }
@@ -66,6 +73,23 @@ struct MonitorPanel: View {
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+            }
+
+            if let update = monitor.availableUpdate {
+                Button { monitor.openAvailableUpdate() } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.down.circle.fill")
+                        Text("发现新版本 \(update.version)")
+                        Spacer()
+                        Text("下载更新")
+                    }
+                    .font(.caption.weight(.medium))
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.blue)
             }
 
             if monitor.snapshot.rateWindows.isEmpty {
@@ -181,6 +205,9 @@ struct MonitorPanel: View {
 
     private var historyChart: some View {
         let recentUsage = Array(monitor.snapshot.dailyUsage.suffix(14))
+        let totalTokens = recentUsage.reduce(0) { $0 + $1.tokens }
+        let maximumTokens = recentUsage.map(\.tokens).max() ?? 1
+        let axisDates = chartAxisDates(from: recentUsage)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text("最近用量").font(.subheadline.weight(.semibold))
@@ -191,7 +218,7 @@ struct MonitorPanel: View {
                         .foregroundStyle(.primary)
                         .transition(.opacity)
                 } else {
-                    Text("悬停柱状图查看")
+                    Text("近 14 天 · 合计 \(compact(totalTokens)) tokens")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -204,8 +231,21 @@ struct MonitorPanel: View {
                             : Color.accentColor.opacity(0.28)
                     )
                     .cornerRadius(2)
+                    .accessibilityLabel(chartDateLabel(item.date))
+                    .accessibilityValue("\(item.tokens.formatted()) tokens")
+                if hoveredDailyUsage?.id == item.id {
+                    RuleMark(x: .value("选中日期", item.date))
+                        .foregroundStyle(Color.secondary.opacity(0.55))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                }
             }
-            .chartXAxis(.hidden)
+            .chartXAxis {
+                AxisMarks(values: axisDates) { value in
+                    AxisValueLabel {
+                        if let date = value.as(String.self) { Text(chartDateLabel(date)) }
+                    }
+                }
+            }
             .chartYAxis {
                 AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { value in
                     AxisGridLine().foregroundStyle(.secondary.opacity(0.15))
@@ -214,6 +254,7 @@ struct MonitorPanel: View {
                     }
                 }
             }
+            .chartYScale(domain: 0...max(1, Int(Double(maximumTokens) * 1.12)))
             .chartOverlay { proxy in
                 GeometryReader { geometry in
                     Rectangle()
@@ -239,7 +280,7 @@ struct MonitorPanel: View {
                         }
                 }
             }
-            .frame(height: 105)
+            .frame(height: 125)
             .animation(.easeOut(duration: 0.12), value: hoveredDailyUsage?.id)
         }
         .padding(12)
@@ -301,6 +342,11 @@ struct MonitorPanel: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
+            ForEach(monitor.apiQuotaSummaries) { quota in
+                apiQuotaRow(quota)
+                if quota.id != monitor.apiQuotaSummaries.last?.id { Divider() }
+            }
+            Divider()
             if monitor.apiRecords.isEmpty {
                 Text("支持 OpenAI、DeepSeek 及 OpenAI 兼容模型；记录 API 响应中的 usage，不保存提示词、回复或密钥。")
                     .font(.caption)
@@ -331,6 +377,45 @@ struct MonitorPanel: View {
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    private func apiQuotaRow(_ quota: APIQuotaSummary) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(quota.displayName).font(.caption.weight(.semibold))
+                    Text("已使用 \(compact(quota.usedTokens)) tokens")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if let remainingPercent = quota.remainingPercent {
+                    RemainingRing(
+                        remainingPercent: remainingPercent,
+                        size: 42,
+                        lineWidth: 4,
+                        fontSize: 10
+                    )
+                }
+            }
+            if let remaining = quota.remainingTokens,
+               let budget = quota.budgetTokens,
+               let remainingPercent = quota.remainingPercent {
+                ProgressView(value: remainingPercent, total: 100)
+                    .tint(remainingColor(remainingPercent))
+                HStack {
+                    Text("剩余 \(compact(remaining))")
+                    Spacer()
+                    Text("总额度 \(compact(budget)) tokens")
+                }
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            } else {
+                Text("在设置中填写 Token 总额度后计算剩余量")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var settings: some View {
         VStack(alignment: .leading, spacing: 16) {
             Group {
@@ -349,12 +434,38 @@ struct MonitorPanel: View {
                 Divider()
                 Text("应用").font(.headline)
                 LaunchAtLoginToggle()
+                Toggle("自动检查更新", isOn: $monitor.automaticallyChecksForUpdates)
+                HStack {
+                    Button("检查更新") { monitor.checkForUpdates() }
+                        .disabled(monitor.isCheckingForUpdates)
+                    if monitor.isCheckingForUpdates { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Text(monitor.updateStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 Button("打开本地数据目录") { monitor.openDataFolder() }
             }
 
             Group {
                 Divider()
                 Text("API 监控").font(.headline)
+                Picker("菜单栏圆环显示", selection: $monitor.menuQuotaSource) {
+                    ForEach(MenuQuotaSource.allCases) { source in
+                        Text(source.label).tag(source)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("API Token 总额度").font(.subheadline)
+                    TextField("OpenAI，例如 1000000", text: $monitor.openAIBudgetText)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("DeepSeek，例如 1000000", text: $monitor.deepSeekBudgetText)
+                        .textFieldStyle(.roundedBorder)
+                    Text("累计已用量来自本机 API usage 记录；剩余量 = 总额度 − 累计已用量。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("本机记录端点").font(.subheadline)
@@ -405,7 +516,7 @@ struct MonitorPanel: View {
             .disabled(monitor.isRefreshing)
             .help("立即刷新")
             Menu {
-                Button("退出 Token Usage Monitor") { NSApplication.shared.terminate(nil) }
+                Button("退出 Token监测") { NSApplication.shared.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
@@ -432,6 +543,21 @@ struct MonitorPanel: View {
     private func compact(_ number: Int?) -> String {
         guard let number else { return "—" }
         return number.formatted(.number.notation(.compactName))
+    }
+
+    private func chartAxisDates(from usage: [DailyUsage]) -> [String] {
+        guard !usage.isEmpty else { return [] }
+        let last = usage.count - 1
+        let indexes = Set([0, last / 3, (last * 2) / 3, last])
+        return indexes.sorted().map { usage[$0].date }
+    }
+
+    private func chartDateLabel(_ value: String) -> String {
+        let components = value.split(separator: "-")
+        guard components.count == 3,
+              let month = Int(components[1]),
+              let day = Int(components[2]) else { return value }
+        return "\(month)/\(day)"
     }
 
     private var supplementalWindows: [RateWindow] {

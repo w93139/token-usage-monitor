@@ -1,4 +1,4 @@
-# Token Usage Monitor for macOS
+# Token监测 for macOS
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
@@ -11,11 +11,18 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 - Product Logo in the panel and macOS application icon
 - Daily token chart and account summary
 - Mouse-hover details with exact date and Token count on the recent-usage chart
+- Automatic panel opening when the app launches
+- Header pin switch for an always-on-top panel across macOS Spaces
+- Readable date ticks, 14-day total, and hover guide in the recent-usage chart
+- Automatic GitHub release checks with an in-app download prompt
+- Black graphite application icon with high-contrast quota ring
 - Local notifications at configurable thresholds
 - Detection of scheduled resets and newly granted reset credits
 - Manual refresh, local-only storage, and optional launch at login
 - Five-second per-task token totals with local conversation titles
 - Local usage ingestion for OpenAI, DeepSeek, and compatible API responses
+- OpenAI/DeepSeek Token budgets with used and remaining quota displays
+- Selectable Codex, OpenAI, or DeepSeek quota source for the menu-bar ring
 - No prompt text, response text, email address, or API key collection
 
 ## Build
@@ -24,7 +31,7 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 ./scripts/build_app.sh
 ```
 
-The finished app is written to `dist/Token Usage Monitor.app`. Move it to the
+The finished app is written to `dist/Token监测.app`. Move it to the
 Applications folder and launch it; the remaining-quota percentage will appear in the
 menu bar. The app requires a local Codex CLI installation, an authenticated
 Codex session, and macOS 13 or newer.

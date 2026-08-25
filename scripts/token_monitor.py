@@ -495,7 +495,7 @@ class AppServerClient:
                 self._spawn(args, mode)
                 self.request(
                     "initialize",
-                    {"clientInfo": {"name": "token_usage_monitor", "title": "Token Usage Monitor", "version": PLUGIN_VERSION}},
+                    {"clientInfo": {"name": "token_usage_monitor", "title": "Token监测", "version": PLUGIN_VERSION}},
                     timeout=12,
                 )
                 self.notify("initialized", {})

@@ -13,6 +13,52 @@ struct DailyUsage: Codable, Identifiable, Equatable {
     var id: String { date }
 }
 
+struct AppUpdateInfo: Equatable {
+    var version: String
+    var pageURL: URL
+    var downloadURL: URL?
+}
+
+enum MenuQuotaSource: String, CaseIterable, Identifiable {
+    case codex
+    case openAI
+    case deepSeek
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .codex: return "Codex 周额度"
+        case .openAI: return "OpenAI API"
+        case .deepSeek: return "DeepSeek API"
+        }
+    }
+}
+
+struct APIQuotaSummary: Identifiable, Equatable {
+    var provider: String
+    var usedTokens: Int
+    var budgetTokens: Int?
+    var id: String { provider }
+
+    var remainingTokens: Int? {
+        budgetTokens.map { max(0, $0 - usedTokens) }
+    }
+
+    var remainingPercent: Double? {
+        guard let budgetTokens, budgetTokens > 0 else { return nil }
+        return max(0, min(100, Double(budgetTokens - usedTokens) / Double(budgetTokens) * 100))
+    }
+
+    var displayName: String {
+        switch provider.lowercased() {
+        case "openai": return "OpenAI API"
+        case "deepseek": return "DeepSeek API"
+        default: return provider
+        }
+    }
+}
+
 struct TaskUsageRecord: Codable, Identifiable, Equatable {
     var id: String
     var title: String

@@ -2,14 +2,52 @@ import AppKit
 import Foundation
 import UserNotifications
 
+private struct GitHubRelease: Decodable {
+    struct Asset: Decodable {
+        var name: String
+        var browserDownloadURL: String
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case browserDownloadURL = "browser_download_url"
+        }
+    }
+
+    var tagName: String
+    var htmlURL: String
+    var assets: [Asset]
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+        case assets
+    }
+}
+
 final class MonitorStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot
     @Published private(set) var taskRecords: [TaskUsageRecord]
     @Published private(set) var apiRecords: [APIUsageRecord] = []
+    @Published private(set) var apiUsageTotals: [String: Int] = [:]
     @Published private(set) var apiMonitorAvailable = false
     @Published private(set) var connectionState: MonitorConnectionState = .starting
     @Published private(set) var lastError: String?
     @Published private(set) var isRefreshing = false
+    @Published private(set) var availableUpdate: AppUpdateInfo?
+    @Published private(set) var updateStatus = "尚未检查更新"
+    @Published private(set) var isCheckingForUpdates = false
+    @Published var automaticallyChecksForUpdates: Bool {
+        didSet { defaults.set(automaticallyChecksForUpdates, forKey: Keys.automaticUpdateChecks) }
+    }
+    @Published var openAIBudgetText: String {
+        didSet { defaults.set(openAIBudgetText, forKey: Keys.openAIBudget) }
+    }
+    @Published var deepSeekBudgetText: String {
+        didSet { defaults.set(deepSeekBudgetText, forKey: Keys.deepSeekBudget) }
+    }
+    @Published var menuQuotaSource: MenuQuotaSource {
+        didSet { defaults.set(menuQuotaSource.rawValue, forKey: Keys.menuQuotaSource) }
+    }
     @Published var notificationsEnabled: Bool {
         didSet { defaults.set(notificationsEnabled, forKey: Keys.notificationsEnabled) }
     }
@@ -25,6 +63,10 @@ final class MonitorStore: ObservableObject {
         static let thresholds = "notifications.remainingThresholds"
         static let resetWarningMinutes = "notifications.resetWarningMinutes"
         static let notifiedResetPrefix = "monitor.notifiedReset."
+        static let automaticUpdateChecks = "updates.automaticCheck"
+        static let openAIBudget = "apiBudget.openai"
+        static let deepSeekBudget = "apiBudget.deepseek"
+        static let menuQuotaSource = "menu.quotaSource"
     }
 
     private let defaults = UserDefaults.standard
@@ -41,6 +83,7 @@ final class MonitorStore: ObservableObject {
     private let notificationDelegate = NotificationDelegate()
     private var stopped = false
     private var terminationObserver: NSObjectProtocol?
+    private var updateCheckTask: URLSessionDataTask?
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -66,6 +109,10 @@ final class MonitorStore: ObservableObject {
         thresholdText = defaults.string(forKey: Keys.thresholds) ?? "20, 5, 0"
         let storedWarning = defaults.integer(forKey: Keys.resetWarningMinutes)
         resetWarningMinutes = storedWarning == 0 ? 30 : storedWarning
+        automaticallyChecksForUpdates = defaults.object(forKey: Keys.automaticUpdateChecks) as? Bool ?? true
+        openAIBudgetText = defaults.string(forKey: Keys.openAIBudget) ?? ""
+        deepSeekBudgetText = defaults.string(forKey: Keys.deepSeekBudget) ?? ""
+        menuQuotaSource = MenuQuotaSource(rawValue: defaults.string(forKey: Keys.menuQuotaSource) ?? "") ?? .codex
         worker.setSpecific(key: workerKey, value: true)
         UNUserNotificationCenter.current().delegate = notificationDelegate
         terminationObserver = NotificationCenter.default.addObserver(
@@ -73,7 +120,10 @@ final class MonitorStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in self?.stop() }
-        DispatchQueue.main.async { [weak self] in self?.start() }
+        DispatchQueue.main.async { [weak self] in
+            self?.start()
+            if self?.automaticallyChecksForUpdates == true { self?.checkForUpdates() }
+        }
     }
 
     deinit {
@@ -87,8 +137,47 @@ final class MonitorStore: ObservableObject {
     }
 
     var menuTitle: String {
-        guard let remaining = primaryWindow?.remainingPercent else { return "--%" }
+        guard let remaining = menuBarRemainingPercent else { return "--%" }
         return "\(Int(remaining.rounded()))%"
+    }
+
+    var menuBarRemainingPercent: Double? {
+        switch menuQuotaSource {
+        case .codex: return primaryWindow?.remainingPercent
+        case .openAI: return apiQuota(for: "openai").remainingPercent
+        case .deepSeek: return apiQuota(for: "deepseek").remainingPercent
+        }
+    }
+
+    var apiQuotaSummaries: [APIQuotaSummary] {
+        var providers = Set(apiUsageTotals.keys.map { $0.lowercased() })
+        providers.formUnion(["openai", "deepseek"])
+        let preferred = ["openai", "deepseek"]
+        return providers.sorted {
+            (preferred.firstIndex(of: $0) ?? Int.max, $0) < (preferred.firstIndex(of: $1) ?? Int.max, $1)
+        }.map { apiQuota(for: $0) }
+    }
+
+    func apiQuota(for provider: String) -> APIQuotaSummary {
+        let normalized = provider.lowercased()
+        let budgetText: String?
+        switch normalized {
+        case "openai": budgetText = openAIBudgetText
+        case "deepseek": budgetText = deepSeekBudgetText
+        default: budgetText = nil
+        }
+        let budget = budgetText.flatMap(parseTokenBudget)
+        return APIQuotaSummary(
+            provider: normalized,
+            usedTokens: apiUsageTotals[normalized] ?? 0,
+            budgetTokens: budget
+        )
+    }
+
+    private func parseTokenBudget(_ value: String) -> Int? {
+        let digits = value.filter(\.isNumber)
+        guard let number = Int(digits), number > 0 else { return nil }
+        return number
     }
 
     var thresholds: [Int] {
@@ -125,6 +214,8 @@ final class MonitorStore: ObservableObject {
         timer = nil
         taskTimer?.cancel()
         taskTimer = nil
+        updateCheckTask?.cancel()
+        updateCheckTask = nil
         let closeClient = { [weak self] in
             self?.client?.close()
             self?.client = nil
@@ -153,6 +244,63 @@ final class MonitorStore: ObservableObject {
 
     func openDataFolder() {
         NSWorkspace.shared.open(dataDirectory)
+    }
+
+    func checkForUpdates() {
+        guard !isCheckingForUpdates,
+              let url = URL(string: "https://api.github.com/repos/w93139/token-usage-monitor/releases/latest") else { return }
+        isCheckingForUpdates = true
+        updateStatus = "正在检查更新…"
+
+        var request = URLRequest(url: url)
+        request.setValue("TokenMonitor-macOS", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        updateCheckTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isCheckingForUpdates = false
+                self.updateCheckTask = nil
+                if let error {
+                    self.updateStatus = "检查失败：\(error.localizedDescription)"
+                    return
+                }
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
+                      let release = try? JSONDecoder().decode(GitHubRelease.self, from: data),
+                      let pageURL = URL(string: release.htmlURL) else {
+                    self.updateStatus = "暂时无法读取 GitHub 版本信息"
+                    return
+                }
+
+                let remoteVersion = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+                let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+                if self.isVersion(remoteVersion, newerThan: currentVersion) {
+                    let download = release.assets.first(where: { $0.name.hasSuffix(".zip") })
+                        .flatMap { URL(string: $0.browserDownloadURL) }
+                    self.availableUpdate = AppUpdateInfo(version: remoteVersion, pageURL: pageURL, downloadURL: download)
+                    self.updateStatus = "发现新版本 \(remoteVersion)"
+                } else {
+                    self.availableUpdate = nil
+                    self.updateStatus = "当前已是最新版（\(currentVersion)）"
+                }
+            }
+        }
+        updateCheckTask?.resume()
+    }
+
+    func openAvailableUpdate() {
+        guard let update = availableUpdate else { return }
+        NSWorkspace.shared.open(update.downloadURL ?? update.pageURL)
+    }
+
+    private func isVersion(_ candidate: String, newerThan current: String) -> Bool {
+        let left = candidate.split(separator: ".").map { Int($0) ?? 0 }
+        let right = current.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(left.count, right.count) {
+            let lhs = index < left.count ? left[index] : 0
+            let rhs = index < right.count ? right[index] : 0
+            if lhs != rhs { return lhs > rhs }
+        }
+        return false
     }
 
     private func collect(forceReconnect: Bool = false) {
@@ -249,9 +397,11 @@ final class MonitorStore: ObservableObject {
             let records = try readTaskRecords()
             persistTaskRecords(records)
             let apiRecords = readAPIUsageRecords()
+            let apiUsageTotals = readAPIUsageTotals()
             DispatchQueue.main.async {
                 self.taskRecords = records
                 self.apiRecords = apiRecords
+                self.apiUsageTotals = apiUsageTotals
             }
         } catch {
             // Task history is an enhancement. Quota monitoring continues if the
@@ -261,6 +411,10 @@ final class MonitorStore: ObservableObject {
 
     private func startAPIUsageServer() {
         guard apiServerProcess == nil else { return }
+        if isAPIUsageServerHealthy() {
+            DispatchQueue.main.async { self.apiMonitorAvailable = true }
+            return
+        }
         guard let resources = Bundle.main.resourceURL else { return }
         let serverScript = resources.appendingPathComponent("api_usage_server.py")
         guard FileManager.default.fileExists(atPath: serverScript.path) else { return }
@@ -291,10 +445,43 @@ final class MonitorStore: ObservableObject {
         do {
             try process.run()
             apiServerProcess = process
-            DispatchQueue.main.async { self.apiMonitorAvailable = true }
+            process.terminationHandler = { [weak self, weak process] _ in
+                guard let self, let process else { return }
+                self.worker.async {
+                    guard self.apiServerProcess === process else { return }
+                    self.apiServerProcess = nil
+                    let isAvailable = self.isAPIUsageServerHealthy()
+                    DispatchQueue.main.async { self.apiMonitorAvailable = isAvailable }
+                }
+            }
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline, process.isRunning, !isAPIUsageServerHealthy() {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+            let isAvailable = isAPIUsageServerHealthy()
+            if !isAvailable, process.isRunning { process.terminate() }
+            DispatchQueue.main.async { self.apiMonitorAvailable = isAvailable }
         } catch {
             DispatchQueue.main.async { self.apiMonitorAvailable = false }
         }
+    }
+
+    private func isAPIUsageServerHealthy() -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:47821/health") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 0.75
+        let semaphore = DispatchSemaphore(value: 0)
+        var isHealthy = false
+        let task = URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200, let data,
+                  let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+            isHealthy = payload["ok"] as? Bool == true
+                && payload["service"] as? String == "token-usage-monitor"
+        }
+        task.resume()
+        if semaphore.wait(timeout: .now() + 1) == .timedOut { task.cancel() }
+        return isHealthy
     }
 
     private func readAPIUsageRecords() -> [APIUsageRecord] {
@@ -340,6 +527,31 @@ final class MonitorStore: ObservableObject {
             }
         } catch {
             return []
+        }
+    }
+
+    private func readAPIUsageTotals() -> [String: Int] {
+        let database = dataDirectory.appendingPathComponent("usage.sqlite3")
+        guard FileManager.default.fileExists(atPath: database.path) else { return [:] }
+        let query = "SELECT LOWER(provider) AS provider, SUM(total_tokens) AS total FROM api_usage GROUP BY LOWER(provider);"
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-readonly", "-json", database.path, query]
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0, !data.isEmpty,
+                  let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [:] }
+            return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+                guard let provider = row.string("provider"), let total = row.integer("total") else { return nil }
+                return (provider.lowercased(), total)
+            })
+        } catch {
+            return [:]
         }
     }
 

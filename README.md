@@ -1,4 +1,4 @@
-# Token Usage Monitor
+# Token监测 (Token Usage Monitor)
 
 A local, privacy-focused Codex plugin for tracking token activity, rate-limit windows, scheduled resets, and earned reset credits.
 
@@ -7,8 +7,14 @@ The repository also includes a native macOS 13+ menu-bar app in
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
 
-Version 1.4 adds mouse-hover inspection to the recent-usage chart, showing the
-exact date and Token count while highlighting the selected bar. Version 1.3
+Version 1.5 introduces the Chinese product name Token监测, a black graphite app
+icon, automatic GitHub release checks, and an in-app download prompt. It opens
+the monitor panel when the app launches and adds a pin control
+that keeps it above other windows across macOS Spaces. Click the filled pin
+again to return the open panel to normal window layering. The recent-usage chart
+also adds readable date ticks, a 14-day total, and a hover guide. Version 1.4 added
+mouse-hover inspection to the recent-usage chart, showing the exact date and
+Token count while highlighting the selected bar. Version 1.3
 added a live circular remaining-quota indicator to the menu bar and
 quota cards. The white arc is the remaining allowance, the consumed portion is
 left blank, and each card also shows the exact consumed percentage. The app
@@ -22,12 +28,15 @@ Build the finished app with:
 ```bash
 cd macos/TokenUsageMonitor
 ./scripts/build_app.sh
-open 'dist/Token Usage Monitor.app'
+open 'dist/Token监测.app'
 ```
 
 The menu bar shows the current remaining-quota percentage inside a live ring. Click it to view all quota
 windows, reset countdowns, a 14-day activity chart, alert settings, manual
-refresh, and the launch-at-login option. The local build is ad-hoc signed;
+refresh, and the launch-at-login option. Use the pin button in the panel header
+to keep the panel above other windows. Automatic update checks are enabled by
+default and can be disabled in Settings; update downloads open from the signed
+GitHub release. The local build is ad-hoc signed;
 Developer ID signing and Apple notarization are required before distributing a
 download that opens without Gatekeeper review on other Macs.
 
@@ -73,6 +82,12 @@ requests and must never receive an API key, prompt, or response body. OpenAI's
 organization-wide Usage API requires an admin key; DeepSeek exposes per-response
 usage and an account balance endpoint, so response-level ingestion is the
 portable default.
+
+The macOS settings screen accepts an optional Token budget for OpenAI and
+DeepSeek. The API card then shows lifetime recorded usage, remaining Tokens, and
+remaining percentage. The menu-bar ring can independently display Codex,
+OpenAI, or DeepSeek remaining quota. Budgets stay in local macOS preferences;
+the monitor never requests provider credentials.
 
 ## Runtime behavior
 

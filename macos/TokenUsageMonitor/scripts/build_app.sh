@@ -4,7 +4,7 @@ set -euo pipefail
 project_dir="${0:A:h:h}"
 build_dir="${TOKEN_MONITOR_BUILD_DIR:-$project_dir/.product-build}"
 dist_dir="${TOKEN_MONITOR_DIST_DIR:-$project_dir/dist}"
-app_path="$dist_dir/Token Usage Monitor.app"
+app_path="$dist_dir/Token监测.app"
 binary_path="$build_dir/TokenUsageMonitor"
 
 mkdir -p "$build_dir" "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
