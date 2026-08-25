@@ -10,7 +10,7 @@
 ## 下载与安装
 
 1. 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest)
-   下载 `Token-Monitor-macOS-arm64-v1.6.0.zip`。
+   下载 `Token-Monitor-macOS-arm64-v1.6.1.zip`。
 2. 解压后将 `Token监测.app` 移入“应用程序”文件夹并启动。
 3. 首次启动若被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
 

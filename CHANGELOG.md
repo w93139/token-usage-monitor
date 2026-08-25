@@ -2,6 +2,12 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.6.1] - 2026-08-25
+
+### Fixed
+
+- Restored the live remaining-quota ring beside the readable percentage in the macOS menu bar.
+
 ## [1.6.0] - 2026-08-25
 
 ### Changed

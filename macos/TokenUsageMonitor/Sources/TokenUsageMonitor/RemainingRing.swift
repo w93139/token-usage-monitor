@@ -5,6 +5,7 @@ struct RemainingRing: View {
     let size: CGFloat
     let lineWidth: CGFloat
     let fontSize: CGFloat
+    var showsValue = true
 
     private var normalized: Double {
         min(100, max(0, remainingPercent ?? 0))
@@ -30,9 +31,11 @@ struct RemainingRing: View {
                     .shadow(color: .black.opacity(0.3), radius: 1)
                     .animation(.easeInOut(duration: 0.3), value: normalized)
             }
-            Text(displayValue)
-                .font(.system(size: fontSize, weight: .bold, design: .rounded).monospacedDigit())
-                .foregroundStyle(.white)
+            if showsValue {
+                Text(displayValue)
+                    .font(.system(size: fontSize, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+            }
         }
         .frame(width: size, height: size)
         .accessibilityElement(children: .ignore)
