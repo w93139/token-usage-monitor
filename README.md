@@ -1,6 +1,31 @@
 # Token监测 (Token Usage Monitor)
 
-A local, privacy-focused Codex plugin for tracking token activity, rate-limit windows, scheduled resets, and earned reset credits.
+[![CI](https://github.com/w93139/token-usage-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/w93139/token-usage-monitor/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/w93139/token-usage-monitor)](https://github.com/w93139/token-usage-monitor/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
+
+本地优先、注重隐私的 Codex 插件与 macOS 菜单栏应用，用于监测任务 Token、API
+用量、额度窗口、刷新时间和额外刷新次数。提示词、回复正文和 API Key 均不会被保存。
+
+## 下载与安装
+
+1. 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest)
+   下载 `Token-Monitor-macOS-arm64-v1.5.2.zip`。
+2. 解压后将 `Token监测.app` 移入“应用程序”文件夹并启动。
+3. 首次启动若被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
+
+运行要求：Apple Silicon Mac、macOS 13 或更高版本，以及已登录的本地 Codex/ChatGPT
+环境。当前公开构建采用 ad-hoc 签名；Developer ID 签名和 Apple 公证尚未完成。
+
+## 核心能力
+
+- 菜单栏实时余量圆环，可选择 Codex、OpenAI API 或 DeepSeek API
+- 每个任务的 Token 总量、对话名称、模型和更新时间
+- OpenAI/DeepSeek 兼容 API 的输入、输出、缓存和推理 Token 记录
+- 可配置 API Token 总额度，并显示已用量、余量和剩余百分比
+- 14 天最近用量图、悬停详情、额度刷新倒计时和本地通知
+- 启动自动展开、窗口置顶、登录启动和 GitHub Release 自动检查
+- 本地 SQLite 存储，监听端点仅绑定 `127.0.0.1`
 
 The repository also includes a native macOS 13+ menu-bar app in
 `macos/TokenUsageMonitor`. It provides a glanceable remaining-quota percentage, reset
@@ -89,6 +114,9 @@ remaining percentage. The menu-bar ring can independently display Codex,
 OpenAI, or DeepSeek remaining quota. Budgets stay in local macOS preferences;
 the monitor never requests provider credentials.
 
+完整接入示例、字段说明和安全边界见
+[API Integration Guide](docs/API_INTEGRATION.md)。
+
 ## Runtime behavior
 
 The MCP server starts a background collector while the plugin is active. The
@@ -120,6 +148,18 @@ Use the `configure_usage_alerts` tool to change these settings. Set `TOKEN_USAGE
 ```bash
 python3 -m unittest discover -s scripts/tests -v
 ```
+
+macOS 应用构建：
+
+```bash
+macos/TokenUsageMonitor/scripts/build_app.sh
+```
+
+## Contributing and security
+
+- 贡献代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要公开附带敏感数据的 Issue。
+- 版本变化见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 

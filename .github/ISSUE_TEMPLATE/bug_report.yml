@@ -1,0 +1,44 @@
+name: Bug report
+description: Report reproducible behavior in the plugin or macOS application.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include API keys, prompts, responses, account identifiers, or private conversation data.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      placeholder: "1.5.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - macOS application
+        - Codex plugin
+        - API usage endpoint
+        - Notifications or rate limits
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      description: Use redacted sample data only.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.6"

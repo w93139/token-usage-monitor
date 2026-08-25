@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Private security report
+    url: https://github.com/w93139/token-usage-monitor/security/advisories/new
+    about: Report vulnerabilities or sensitive findings privately.
