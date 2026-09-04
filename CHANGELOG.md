@@ -2,6 +2,12 @@
 
 All notable changes to Token监测 are documented here.
 
+## Unreleased
+
+### Fixed
+
+- Preserve the last known extra-reset count when a rate-limit response temporarily omits reset-credit metadata, preventing repeated “new reset available” notifications.
+
 ## [1.6.2] - 2026-08-25
 
 ### Fixed

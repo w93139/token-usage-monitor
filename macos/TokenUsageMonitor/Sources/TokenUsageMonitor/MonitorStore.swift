@@ -650,9 +650,17 @@ final class MonitorStore: ObservableObject {
             return $0.id < $1.id
         }
         if limits.isEmpty { windows = fallback.rateWindows }
-        let resetCredits = limits.isEmpty
-            ? fallback.availableResetCredits
-            : limits.dictionary("rateLimitResetCredits")?.integer("availableCount") ?? 0
+        let resetCredits: Int
+        if limits.isEmpty {
+            resetCredits = fallback.availableResetCredits
+        } else if let availableCount = limits.dictionary("rateLimitResetCredits")?.integer("availableCount") {
+            resetCredits = availableCount
+        } else {
+            // Reset-credit metadata can be absent from an otherwise successful
+            // response. Keep the last known value instead of briefly dropping
+            // to zero and notifying again when the field reappears.
+            resetCredits = fallback.availableResetCredits
+        }
         return UsageSnapshot(
             capturedAt: Date(),
             account: account,

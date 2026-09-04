@@ -106,6 +106,48 @@ class AlertConfigurationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 monitor.configure_alerts(True, [], 15)
 
+    def test_missing_reset_credit_metadata_does_not_repeat_grant_alert(self):
+        with tempfile.TemporaryDirectory() as temp:
+            monitor = UsageMonitor(Path(temp), autostart=False)
+            monitor._evaluate_alerts(
+                [],
+                [{"id": "reset-1"}, {"id": "reset-2"}],
+                {"rateLimitResetCredits": {"availableCount": 2}},
+            )
+            self.assertEqual(monitor.store.get_state("reset_credits.available_count"), "2")
+
+            monitor._evaluate_alerts([], [], {})
+            self.assertEqual(monitor.store.get_state("reset_credits.available_count"), "2")
+
+            monitor._evaluate_alerts(
+                [],
+                [{"id": "reset-1"}, {"id": "reset-2"}],
+                {"rateLimitResetCredits": {"availableCount": 2}},
+            )
+            events = monitor.store.recent_events(20)
+            grant_events = [event for event in events if event["event_type"] == "extra_reset_granted"]
+            self.assertEqual(len(grant_events), 1)
+
+    def test_explicit_zero_reset_credit_count_is_recorded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            monitor = UsageMonitor(Path(temp), autostart=False)
+            monitor.store.set_state("reset_credits.available_count", "2")
+            monitor._evaluate_alerts([], [], {"rateLimitResetCredits": {"availableCount": 0}})
+            self.assertEqual(monitor.store.get_state("reset_credits.available_count"), "0")
+
+    def test_shared_collectors_claim_reset_credit_alert_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            first = UsageMonitor(Path(temp), autostart=False)
+            second = UsageMonitor(Path(temp), autostart=False)
+            payload = {"rateLimitResetCredits": {"availableCount": 2}}
+
+            first._evaluate_alerts([], [], payload)
+            second._evaluate_alerts([], [], payload)
+
+            events = first.store.recent_events(20)
+            grant_events = [event for event in events if event["event_type"] == "extra_reset_granted"]
+            self.assertEqual(len(grant_events), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

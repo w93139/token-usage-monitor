@@ -177,6 +177,20 @@ class UsageStore:
                 (key, rendered),
             )
 
+    def swap_state(self, key: str, value: Any, default: str | None = None) -> str | None:
+        """Atomically replace shared state and return its previous value."""
+        rendered = value if isinstance(value, str) else _json(value)
+        with self._lock, self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT value FROM state WHERE key = ?", (key,)).fetchone()
+            previous = row["value"] if row else default
+            conn.execute(
+                "INSERT INTO state(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, rendered),
+            )
+        return previous
+
     def add_event(self, event_type: str, message: str, raw: Any = None) -> None:
         with self._lock, self._connect() as conn:
             conn.execute(
@@ -723,13 +737,18 @@ class UsageMonitor:
                     self.store.set_state(warning_key, "true")
             self.store.set_state(key, row)
 
-        available_count = int(((raw.get("rateLimitResetCredits") or {}).get("availableCount") or 0))
-        previous_count = int(self.store.get_state("reset_credits.available_count", "0") or 0)
+        credit_info = raw.get("rateLimitResetCredits")
+        if not isinstance(credit_info, dict) or credit_info.get("availableCount") is None:
+            # A successful rate-limit response may temporarily omit reset-credit
+            # metadata. Preserve the last known count so the next complete
+            # response is not mistaken for a newly granted credit.
+            return
+        available_count = int(credit_info["availableCount"])
+        previous_count = int(self.store.swap_state("reset_credits.available_count", str(available_count), "0") or 0)
         if available_count > previous_count:
             body = f"检测到 {available_count - previous_count} 个新的额度重置机会；不会自动兑换"
             self.notifier.send("Codex 额外刷新可用", body)
             self.store.add_event("extra_reset_granted", body, credits)
-        self.store.set_state("reset_credits.available_count", str(available_count))
 
     def refresh_now(self, wait_seconds: int = 15) -> dict[str, Any]:
         before = self.last_refresh
