@@ -10,7 +10,7 @@
 ## 下载与安装
 
 1. 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest)
-   下载 `Token-Monitor-macOS-arm64-v1.6.2.zip`。
+   下载 `Token-Monitor-macOS-arm64-v1.6.3.zip`。
 2. 解压后将 `Token监测.app` 移入“应用程序”文件夹并启动。
 3. 首次启动若被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
 
@@ -31,6 +31,10 @@ The repository also includes a native macOS 13+ menu-bar app in
 `macos/TokenUsageMonitor`. It provides a glanceable remaining-quota percentage, reset
 countdown, daily chart, local alerts, and optional launch at login while using
 the same local-only privacy model.
+
+Version 1.6.3 preserves the last known extra-reset count when reset-credit metadata
+is temporarily unavailable, avoiding duplicate grant notifications. Collectors
+sharing the local database claim each detected increase only once.
 
 Version 1.6 adopts a standard resizable macOS window, a 1024×1024 app icon with
 true transparent margins, and a dedicated always-front quota badge. The pin

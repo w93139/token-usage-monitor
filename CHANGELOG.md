@@ -2,11 +2,13 @@
 
 All notable changes to Token监测 are documented here.
 
-## Unreleased
+## [1.6.3] - 2026-09-08
 
 ### Fixed
 
 - Preserve the last known extra-reset count when a rate-limit response temporarily omits reset-credit metadata, preventing repeated “new reset available” notifications.
+- Claim reset-credit count increases atomically across Python collectors sharing the local database, avoiding duplicate grant alerts.
+- Continue recording an explicit zero count so consuming all credits is reflected correctly.
 
 ## [1.6.2] - 2026-08-25
 
