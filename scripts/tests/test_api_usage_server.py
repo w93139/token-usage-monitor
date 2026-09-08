@@ -65,6 +65,24 @@ class APIUsageServerTests(unittest.TestCase):
         self.assertEqual(len(history["data"]), 1)
         self.assertEqual(history["data"][0]["total_tokens"], 15)
 
+    def test_stream_without_final_usage_rejected_then_valid_final_recorded_once(self):
+        def post(payload):
+            return Request(f"{self.base_url}/v1/usage", data=json.dumps(payload).encode(),
+                           headers={"Content-Type": "application/json"}, method="POST")
+        base = {"provider": "relay", "request_id": "stream-1", "source": "stream_final"}
+        for usage in (None, {}, {"input_tokens": 12}):
+            with self.assertRaises(HTTPError) as caught:
+                self.read_json(post(dict(base, usage=usage)))
+            self.assertEqual(caught.exception.code, 400)
+        _, history = self.read_json(f"{self.base_url}/v1/usage")
+        self.assertEqual(history["data"], [])
+        final = post(dict(base, usage={"input_tokens": 12, "output_tokens": 3}))
+        self.assertTrue(self.read_json(final)[1]["recorded"])
+        self.assertFalse(self.read_json(final)[1]["recorded"])
+        _, history = self.read_json(f"{self.base_url}/v1/usage")
+        self.assertEqual(history["data"][0]["total_tokens"], 15)
+        self.assertEqual(history["data"][0]["source"], "stream_final")
+
     def test_browser_cross_origin_preflight_is_rejected(self):
         request = Request(f"{self.base_url}/v1/usage", method="OPTIONS")
         with self.assertRaises(HTTPError) as caught:

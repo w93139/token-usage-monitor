@@ -21,7 +21,7 @@ struct TokenUsageMonitorApp: App {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .monospacedDigit()
             }
-            .help("\(monitor.menuQuotaSource.label) 剩余额度")
+            .help("\(monitor.menuQuotaLabel) 剩余额度")
             .onAppear { presentationController.openOnLaunch(monitor: monitor) }
         }
         .menuBarExtraStyle(.window)

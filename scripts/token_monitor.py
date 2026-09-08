@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from context_snapshot import resolve_database
+
 
 PLUGIN_VERSION = "0.1.0"
 
@@ -291,55 +293,107 @@ class UsageStore:
         return rows, credits
 
     def save_thread_usage(self, params: dict[str, Any]) -> None:
-        usage = params.get("usage") if isinstance(params.get("usage"), dict) else params
-        values = {
-            "input": usage.get("inputTokens", usage.get("input_tokens")),
-            "cached": usage.get("cachedInputTokens", usage.get("cached_input_tokens")),
-            "output": usage.get("outputTokens", usage.get("output_tokens")),
-            "reasoning": usage.get("reasoningTokens", usage.get("reasoning_tokens")),
-            "total": usage.get("totalTokens", usage.get("total_tokens")),
-        }
+        """Keep cumulative columns compatible, whitelist current/last metadata."""
+        def counters(value: Any) -> dict[str, int | None]:
+            usage = value if isinstance(value, dict) else {}
+            aliases = {
+                "input": ("inputTokens", "input_tokens"),
+                "cached": ("cachedInputTokens", "cached_input_tokens"),
+                "output": ("outputTokens", "output_tokens"),
+                "reasoning": ("reasoningOutputTokens", "reasoning_output_tokens", "reasoningTokens", "reasoning_tokens"),
+                "total": ("totalTokens", "total_tokens"),
+            }
+            result = {}
+            for key, names in aliases.items():
+                value = next((usage[name] for name in names if name in usage), None)
+                result[key] = value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+            return result
+
+        current = params.get("tokenUsage")
+        if isinstance(current, dict):
+            values = counters(current.get("total"))
+            last = counters(current.get("last"))
+            window = current.get("modelContextWindow")
+            window = window if type(window) is int and 0 < window <= 2**63 - 1 else None
+        else:
+            values = counters(params.get("usage") if isinstance(params.get("usage"), dict) else params)
+            last, window = None, None
+        thread_id = params.get("threadId") or params.get("thread_id")
+        thread_id = thread_id if isinstance(thread_id, str) and len(thread_id) <= 200 else None
+        metadata = {"threadId": thread_id, "total": values, "last": last, "modelContextWindow": window}
         with self._lock, self._connect() as conn:
             conn.execute(
                 "INSERT INTO thread_usage(captured_at, thread_id, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens, raw_json) "
                 "VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    _now(),
-                    params.get("threadId") or params.get("thread_id"),
+                    _now(), thread_id,
                     values["input"], values["cached"], values["output"], values["reasoning"], values["total"],
-                    _json(params),
+                    _json(metadata),
                 ),
             )
 
     def save_api_usage(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Persist token counts from an API response without storing request/response text."""
-        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else payload
-        provider = str(payload.get("provider") or "custom").strip().lower()[:64]
-        model = str(payload.get("model") or usage.get("model") or "unknown").strip()[:128]
-        task_name_raw = payload.get("taskName", payload.get("task_name"))
-        task_name = str(task_name_raw).strip()[:280] if task_name_raw else None
-        request_id_raw = payload.get("requestId", payload.get("request_id", payload.get("id")))
-        request_id = str(request_id_raw).strip()[:200] if request_id_raw else None
+        if "usage" in payload and not isinstance(payload["usage"], dict):
+            raise ValueError("Final usage metadata is missing")
+        usage = payload.get("usage", payload)
 
-        input_details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details") or {}
-        output_details = usage.get("output_tokens_details") or usage.get("completion_tokens_details") or {}
-        input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
-        cached_tokens = int(
-            usage.get("cached_input_tokens", usage.get("prompt_cache_hit_tokens", input_details.get("cached_tokens", 0))) or 0
-        )
-        output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
-        reasoning_tokens = int(
-            usage.get("reasoning_tokens", output_details.get("reasoning_tokens", output_details.get("reasoning_output_tokens", 0))) or 0
-        )
-        total_tokens = int(usage.get("total_tokens", usage.get("totalTokens", input_tokens + output_tokens)) or 0)
-        values = [input_tokens, cached_tokens, output_tokens, reasoning_tokens, total_tokens]
-        if any(value < 0 for value in values):
-            raise ValueError("Token counts must be non-negative")
-        if total_tokens == 0 and input_tokens == 0 and output_tokens == 0:
+        def label(value: Any, name: str, maximum: int, default: str | None = None) -> str | None:
+            if value is None:
+                return default
+            if not isinstance(value, str) or not value.strip() or len(value) > maximum or any(ord(c) < 32 for c in value):
+                raise ValueError(f"Invalid {name} metadata")
+            return value.strip()
+
+        provider = label(payload.get("provider"), "provider", 64, "custom").lower()
+        model = label(payload.get("model", usage.get("model")), "model", 128, "unknown")
+        task_name = label(payload.get("taskName", payload.get("task_name")), "task name", 280)
+        request_id = label(payload.get("requestId", payload.get("request_id", payload.get("id"))), "request id", 200)
+        source = payload.get("source", "response")
+        if source not in ("response", "stream_final", "manual"):
+            raise ValueError("source must be response, stream_final, or manual")
+        if source == "stream_final" and request_id is None:
+            raise ValueError("stream_final requires a request id for deduplication")
+
+        def detail(*names: str) -> dict:
+            value = next((usage[name] for name in names if name in usage), {})
+            if value is None:
+                return {}
+            if not isinstance(value, dict):
+                raise ValueError("Token details must be an object")
+            return value
+
+        def count(value: Any, default: int = 0) -> int:
+            if value is None:
+                return default
+            if type(value) is not int or not 0 <= value <= 2**63 - 1:
+                raise ValueError("Token counts must be non-negative integers")
+            return value
+
+        input_details = detail("input_tokens_details", "prompt_tokens_details")
+        output_details = detail("output_tokens_details", "completion_tokens_details")
+        input_value = usage.get("input_tokens", usage.get("prompt_tokens"))
+        output_value = usage.get("output_tokens", usage.get("completion_tokens"))
+        total_value = usage.get("total_tokens", usage.get("totalTokens"))
+        if total_value is None and (input_value is None or output_value is None):
+            raise ValueError("Final usage requires total_tokens or both input and output counts")
+        input_tokens = count(input_value)
+        output_tokens = count(output_value)
+        cached_tokens = count(usage.get("cached_input_tokens", usage.get("prompt_cache_hit_tokens", input_details.get("cached_tokens"))))
+        reasoning_tokens = count(usage.get("reasoning_tokens", output_details.get("reasoning_tokens", output_details.get("reasoning_output_tokens"))))
+        total_tokens = count(total_value, count(input_tokens + output_tokens))
+        if input_value is not None and cached_tokens > input_tokens:
+            raise ValueError("Cached input tokens cannot exceed input tokens")
+        if output_value is not None and reasoning_tokens > output_tokens:
+            raise ValueError("Reasoning tokens cannot exceed output tokens")
+        if total_tokens < input_tokens + output_tokens:
+            raise ValueError("Total tokens cannot be smaller than input plus output")
+        if total_tokens == 0:
             raise ValueError("At least one token count is required")
 
-        captured_at = int(payload.get("capturedAt", payload.get("captured_at", _now())) or _now())
-        source = str(payload.get("source") or "response").strip()[:64]
+        captured_at = payload.get("capturedAt", payload.get("captured_at", _now()))
+        if type(captured_at) is not int or not 0 < captured_at <= _now() + 300:
+            raise ValueError("capturedAt must be a valid Unix timestamp in seconds")
         with self._lock, self._connect() as conn:
             cursor = conn.execute(
                 "INSERT OR IGNORE INTO api_usage "
@@ -363,6 +417,7 @@ class UsageStore:
             "reasoningTokens": reasoning_tokens,
             "totalTokens": total_tokens,
             "capturedAt": captured_at,
+            "source": source,
         }
 
     def api_usage_history(self, days: int = 30, limit: int = 200) -> list[dict[str, Any]]:
@@ -377,19 +432,12 @@ class UsageStore:
         return [dict(row) for row in rows]
 
     def codex_task_history(self, limit: int = 100) -> list[dict[str, Any]]:
-        override = os.environ.get("CODEX_STATE_DB")
-        if override:
-            database = Path(override).expanduser()
-        else:
-            candidates = sorted((Path.home() / ".codex").glob("state_*.sqlite"), reverse=True)
-            if not candidates:
-                return []
-            database = candidates[0]
-        if not database.is_file():
+        database = resolve_database()
+        if database is None or not database.is_file():
             return []
         query = """
             SELECT id,
-                   SUBSTR(COALESCE(NULLIF(TRIM(name), ''), NULLIF(TRIM(title), ''), '未命名任务'), 1, 280) AS title,
+                   SUBSTR(COALESCE(NULLIF(TRIM(name), ''), '未命名任务 ' || SUBSTR(id, 1, 8)), 1, 280) AS title,
                    tokens_used AS tokens,
                    created_at,
                    updated_at,
@@ -403,7 +451,7 @@ class UsageStore:
             ORDER BY updated_at DESC
             LIMIT ?
         """
-        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5)
+        connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=5)
         connection.row_factory = sqlite3.Row
         try:
             rows = connection.execute(query, (max(1, min(1000, limit)),)).fetchall()

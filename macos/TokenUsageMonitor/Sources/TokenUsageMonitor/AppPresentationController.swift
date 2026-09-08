@@ -129,7 +129,7 @@ private struct QuotaBadgeView: View {
                 Text(monitor.menuTitle)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .monospacedDigit()
-                Text(monitor.menuQuotaSource.label)
+                Text(monitor.menuQuotaLabel)
                     .font(.system(size: 8.5, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

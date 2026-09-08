@@ -10,12 +10,24 @@
 ## 下载与安装
 
 1. 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest)
-   下载 `Token-Monitor-macOS-arm64-v1.6.3.zip`。
+   下载 `Token-Monitor-macOS-arm64-v1.7.0.zip`。
 2. 解压后将 `Token监测.app` 移入“应用程序”文件夹并启动。
 3. 首次启动若被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
 
 运行要求：Apple Silicon Mac、macOS 13 或更高版本，以及已登录的本地 Codex/ChatGPT
 环境。当前公开构建采用 ad-hoc 签名；Developer ID 签名和 Apple 公证尚未完成。
+
+## 1.7.0 更新
+
+- “任务累计 Token”独立刷新，显示读取时间、失败与过期状态；任务读取与联网额度刷新分开。
+- 可选择任务查看最近一次运行时上报的上下文数量、实际容量和上报时间。超过 60 秒标为历史快照；压缩、回滚、数据缺失或有界尾读未命中时显示不可用，不用累计值替代。
+- 任务、API 行与按钮增加轻量悬停反馈；任务提示显示完整标题和精确计数，支持系统“减少动态效果”。
+- 设置中可添加/编辑/移除中转站渠道配置，填写本地 Token 预算，并选择自定义菜单栏额度来源。移除配置保留用量记录。
+- 分别显示接收端健康、每渠道已收到的记录数与最近记录时间；流式最终 usage 缺失会拒绝记录，重复上报不累加。
+
+任务累计数来自 Codex 本地数据库，可能重复计入历史输入；父任务是否包含全部子代理用量尚未核实。上下文来自本机 Codex 日志中最近可用的 usage 元数据，不保证反映其后的全部上下文变化。应用只在内存中有界读取日志并提取计数，不持久化对话正文。
+
+任务仅使用明确的名称；没有名称时显示“未命名任务＋短编号”，不再将首条提示词当作标题。旧版派生任务缓存会在升级后按新规则重建，Codex 原始任务和用量数据库保持不变。插件可通过 `get_task_context_usage` 按任务 ID 读取同口径快照。
 
 ## 核心能力
 
@@ -81,7 +93,7 @@ download that opens without Gatekeeper review on other Macs.
 - Per-task Codex totals with the user-facing conversation title
 - API response usage counters grouped by provider, model, and optional task name
 
-It does **not** request or store prompt bodies, response bodies, files, API keys, or account email addresses.
+It does **not** send or persist prompt bodies, response bodies, API keys, or account email addresses. Context inspection reads a bounded tail (at most 4 MiB) of the selected local Codex log in memory and extracts usage/reset metadata only.
 
 ## External API usage
 

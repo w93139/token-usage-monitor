@@ -14,6 +14,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from token_monitor import UsageMonitor  # noqa: E402
+from context_snapshot import read_snapshot  # noqa: E402
 
 
 TOOLS = [
@@ -75,6 +76,12 @@ TOOLS = [
                 "model": {"type": "string", "minLength": 1, "maxLength": 128},
                 "task_name": {"type": "string", "maxLength": 280},
                 "request_id": {"type": "string", "maxLength": 200},
+                "source": {
+                    "type": "string",
+                    "enum": ["response", "stream_final", "manual"],
+                    "default": "response",
+                    "description": "Origin of actual response counters. stream_final requires request_id; manual means transcribed counters, never estimates.",
+                },
                 "usage": {
                     "type": "object",
                     "description": "The response usage object; accepts input/output or prompt/completion token field names.",
@@ -92,6 +99,18 @@ TOOLS = [
             "properties": {
                 "days": {"type": "integer", "minimum": 1, "maximum": 365, "default": 30},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 2000, "default": 200},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_task_context_usage",
+        "description": "Read a task's latest reported context-usage snapshot and runtime window from local Codex metadata. This is neither cumulative task usage nor a live measurement of the complete current context. Check capturedAt and error; missing or reset context is unknown. Never returns message text.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["thread_id"],
+            "properties": {
+                "thread_id": {"type": "string", "minLength": 1, "maxLength": 200},
             },
             "additionalProperties": False,
         },
@@ -192,6 +211,11 @@ class MCPServer:
                 "records": rows,
                 "totalTokens": sum(row["total_tokens"] for row in rows),
             }
+        if name == "get_task_context_usage":
+            thread_id = arguments.get("thread_id")
+            if not isinstance(thread_id, str) or not thread_id or len(thread_id) > 200:
+                raise ValueError("thread_id must be a non-empty string of at most 200 characters")
+            return read_snapshot(thread_id)
         if name == "get_task_usage_history":
             limit = max(1, min(1000, int(arguments.get("limit", 100))))
             rows = self.monitor.store.codex_task_history(limit)
@@ -211,7 +235,7 @@ class MCPServer:
                 {
                     "protocolVersion": requested or "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "token-usage-monitor", "version": "1.6.3"},
+                    "serverInfo": {"name": "token-usage-monitor", "version": "1.7.0"},
                     "instructions": "Local Codex task, OpenAI-compatible API token, and rate-limit monitoring. Never stores prompts, responses, or API keys and never consumes reset credits.",
                 },
             )

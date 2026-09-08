@@ -2,6 +2,12 @@
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
+## Version 1.7.0
+
+Task cumulative counters and last-reported context are shown separately. Task/API refresh runs independently of network quota requests, with explicit success and error states. Hover tooltips expose exact values, and animations respect Reduce Motion. Custom relay channels support local budgets, menu-bar selection and per-channel ingestion diagnostics. No API credentials are requested and changing a base URL alone does not integrate a client.
+
+Context reads only usage/reset metadata from a bounded in-memory tail of the selected local Codex log. It is a last-call snapshot; stale, missing and reset data are labeled rather than inferred from cumulative usage.
+
 ## Features
 
 - Live Codex remaining-quota percentage and reset countdown
@@ -24,7 +30,7 @@ Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 - Local usage ingestion for OpenAI, DeepSeek, and compatible API responses
 - OpenAI/DeepSeek Token budgets with used and remaining quota displays
 - Selectable Codex, OpenAI, or DeepSeek quota source for the menu-bar ring
-- No prompt text, response text, email address, or API key collection
+- No prompt text, response text, email address, or API key persistence
 
 ## Build
 

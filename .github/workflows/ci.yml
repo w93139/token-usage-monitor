@@ -25,5 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build release application
         run: macos/TokenUsageMonitor/scripts/build_app.sh
+      - name: Verify context and budget models
+        run: macos/TokenUsageMonitor/scripts/test_models.sh
       - name: Verify application signature
         run: codesign --verify --deep --strict "macos/TokenUsageMonitor/dist/Token监测.app"

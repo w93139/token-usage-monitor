@@ -18,8 +18,13 @@ Use the `token-usage-monitor` MCP tools as the source of truth for local usage d
 7. Call `get_api_usage_history` for OpenAI, DeepSeek, or other recorded API calls.
 8. Call `record_api_usage` only with counters returned by an API response; never pass prompts, responses, or credentials.
 
+9. Call `get_task_context_usage` with an explicit task `thread_id` to inspect the most recent observable context snapshot. Use `get_task_usage_history` to resolve the task first when necessary.
+
 ## Interpretation
 
+- Task history reports cumulative local counters, not current context size. Whether a parent total includes all subagents is not verified.
+- Context uses the selected task's last runtime usage and effective window; report the event timestamp, label old snapshots, and preserve unavailable/error states after compaction or missing metadata. Never substitute lifetime totals or a guessed model window.
+- API relay channels require client-reported usage. Listener health is not proof that calls are being recorded. API budgets are local targets, not provider balances; streaming final usage requires a stable request ID for deduplication.
 - Treat `usedPercent` and `resetsAt` as authoritative for a reported quota window.
 - Do not convert subscription allowance percentages into invented token totals.
 - Distinguish scheduled resets from earned reset credits.

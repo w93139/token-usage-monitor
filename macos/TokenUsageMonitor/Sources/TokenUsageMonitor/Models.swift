@@ -23,6 +23,7 @@ enum MenuQuotaSource: String, CaseIterable, Identifiable {
     case codex
     case openAI
     case deepSeek
+    case custom
 
     var id: String { rawValue }
 
@@ -31,6 +32,7 @@ enum MenuQuotaSource: String, CaseIterable, Identifiable {
         case .codex: return "Codex 周额度"
         case .openAI: return "OpenAI API"
         case .deepSeek: return "DeepSeek API"
+        case .custom: return "自定义 API 渠道"
         }
     }
 }
@@ -39,6 +41,7 @@ struct APIQuotaSummary: Identifiable, Equatable {
     var provider: String
     var usedTokens: Int
     var budgetTokens: Int?
+    var customName: String? = nil
     var id: String { provider }
 
     var remainingTokens: Int? {
@@ -51,6 +54,7 @@ struct APIQuotaSummary: Identifiable, Equatable {
     }
 
     var displayName: String {
+        if let customName, !customName.isEmpty { return customName }
         switch provider.lowercased() {
         case "openai": return "OpenAI API"
         case "deepseek": return "DeepSeek API"
@@ -59,7 +63,67 @@ struct APIQuotaSummary: Identifiable, Equatable {
     }
 }
 
+struct APIChannel: Codable, Identifiable, Equatable {
+    var id: String
+    var name: String
+    var budget: Int?
+
+    static func parseBudget(_ value: String) -> Int? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.range(of: "^[0-9]+$", options: .regularExpression) != nil,
+              let number = Int(trimmed), number > 0 else { return nil }
+        return number
+    }
+
+    static func validID(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 64 && value.range(of: "^[a-z0-9][a-z0-9_-]*$", options: .regularExpression) != nil
+    }
+}
+
+struct APIActivity: Equatable {
+    var count: Int
+    var lastReceivedAt: Date
+}
+
+struct ContextSnapshot: Decodable, Equatable {
+    var threadId: String
+    var tokens: Int?
+    var window: Int?
+    var capturedAt: Date?
+    var source: String
+    var error: String?
+
+    var percent: Double? {
+        guard error == nil, let tokens, tokens >= 0, let window, window > 0 else { return nil }
+        return Double(tokens) / Double(window) * 100
+    }
+
+    var unavailableReason: String {
+        switch error {
+        case "context_reset": return "上下文已压缩或清空，等待下一次用量上报"
+        default: return "暂未取得可用的上下文统计；不会用任务累计值代替"
+        }
+    }
+}
+
 struct TaskUsageRecord: Codable, Identifiable, Equatable {
+    static let historyQuery = """
+        SELECT id,
+               SUBSTR(COALESCE(NULLIF(TRIM(name), ''), '未命名任务 ' || SUBSTR(id, 1, 8)), 1, 280) AS title,
+               tokens_used AS tokens,
+               created_at AS createdAt,
+               updated_at AS updatedAt,
+               NULLIF(model, '') AS model,
+               archived
+        FROM threads
+        WHERE tokens_used > 0
+          AND thread_source = 'user'
+          AND agent_role IS NULL
+          AND id NOT IN (SELECT child_thread_id FROM thread_spawn_edges)
+        ORDER BY updated_at DESC
+        LIMIT 100;
+    """
+
     var id: String
     var title: String
     var tokens: Int
@@ -74,6 +138,11 @@ struct TaskUsageRecord: Codable, Identifiable, Equatable {
     }
 }
 
+struct TaskRecordsCache: Codable {
+    var version: Int = 2
+    var records: [TaskUsageRecord]
+}
+
 struct APIUsageRecord: Codable, Identifiable, Equatable {
     var id: Int
     var capturedAt: Date
@@ -85,6 +154,7 @@ struct APIUsageRecord: Codable, Identifiable, Equatable {
     var outputTokens: Int
     var reasoningTokens: Int
     var totalTokens: Int
+    var source: String = "response"
 
     var displayTaskName: String {
         guard let taskName, !taskName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

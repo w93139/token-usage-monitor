@@ -2,6 +2,24 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.7.0] - 2026-09-09
+
+### Added
+
+- Dedicated local task/API refresh with busy, successful-read time, failure and stale-data feedback, independent of network quota collection.
+- Selectable last-reported task context snapshots using runtime usage and capacity; explicit unavailable/reset/stale states.
+- Gentle hover feedback and exact task/API tooltips, respecting Reduce Motion.
+- Custom relay channel configuration, local budgets, menu-bar selection, per-channel ingestion status and copyable usage templates.
+- Context, current protocol and streaming-ingestion regression tests plus Swift model checks in CI.
+
+### Fixed
+
+- Parse the current nested Codex tokenUsage protocol and persist only whitelisted usage metadata.
+- Preserve unavailable counters instead of treating missing live events as zero.
+- Reject absent final API usage, invalid counters and source metadata; deduplicate streaming final records by channel/request ID.
+- Select local Codex state database versions numerically and disclose task cumulative scope.
+- Use the same custom Codex paths for task and context reads; never fall back to raw first-message titles for unnamed tasks. Rebuild legacy derived task caches using explicit names only.
+
 ## [1.6.3] - 2026-09-08
 
 ### Fixed

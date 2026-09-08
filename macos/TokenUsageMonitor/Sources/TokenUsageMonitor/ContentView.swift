@@ -6,6 +6,7 @@ import SwiftUI
 struct MonitorPanel: View {
     @ObservedObject var monitor: MonitorStore
     @ObservedObject var presentationController: AppPresentationController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsSettings = false
     @State private var showsSupplementalLimits = false
     @State private var hoveredDailyUsage: DailyUsage?
@@ -54,6 +55,7 @@ struct MonitorPanel: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.borderless)
+            .usageHover()
             .foregroundStyle(presentationController.isQuotaBadgePinned ? Color.accentColor : Color.primary)
             .help(presentationController.isQuotaBadgePinned ? "隐藏顶部余量浮标" : "固定余量数字到屏幕顶部")
             Button { showsSettings.toggle() } label: {
@@ -61,6 +63,7 @@ struct MonitorPanel: View {
                     .frame(width: 20, height: 20)
             }
             .buttonStyle(.borderless)
+            .usageHover()
             .help(showsSettings ? "返回" : "设置")
         }
         .padding(.horizontal, 16)
@@ -108,7 +111,7 @@ struct MonitorPanel: View {
                 ForEach(visibleRateWindows) { window in rateCard(window) }
                 if hiddenSupplementalCount > 0 && !showsSupplementalLimits {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { showsSupplementalLimits = true }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { showsSupplementalLimits = true }
                     } label: {
                         Label("显示 \(hiddenSupplementalCount) 个未使用的模型专属额度", systemImage: "plus.circle")
                             .font(.caption)
@@ -117,7 +120,7 @@ struct MonitorPanel: View {
                     .foregroundStyle(.secondary)
                 } else if showsSupplementalLimits && supplementalWindows.count > 0 {
                     Button("隐藏未使用的模型专属额度") {
-                        withAnimation(.easeInOut(duration: 0.2)) { showsSupplementalLimits = false }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { showsSupplementalLimits = false }
                     }
                     .buttonStyle(.plain)
                     .font(.caption)
@@ -126,7 +129,8 @@ struct MonitorPanel: View {
             }
 
             if let account = monitor.snapshot.account { summaryCard(account) }
-            if !monitor.taskRecords.isEmpty { taskUsageCard }
+            ContextUsageCard(monitor: monitor)
+            taskUsageCard
             apiUsageCard
             if !monitor.snapshot.dailyUsage.isEmpty { historyChart }
 
@@ -284,7 +288,7 @@ struct MonitorPanel: View {
                 }
             }
             .frame(height: 125)
-            .animation(.easeOut(duration: 0.12), value: hoveredDailyUsage?.id)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoveredDailyUsage?.id)
         }
         .padding(12)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
@@ -293,13 +297,35 @@ struct MonitorPanel: View {
     private var taskUsageCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("任务 Token 记录").font(.subheadline.weight(.semibold))
+                Text("任务累计 Token").font(.subheadline.weight(.semibold))
                 Spacer()
-                Label("5 秒刷新", systemImage: "bolt.fill")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
+                Button { monitor.refreshTasks() } label: {
+                    HStack(spacing: 4) {
+                        if monitor.isRefreshingTasks { ProgressView().controlSize(.mini) }
+                        else { Image(systemName: "arrow.clockwise") }
+                        Text("刷新")
+                    }.font(.caption)
+                }
+                .disabled(monitor.isRefreshingTasks).usageHover()
+                .help("立即重新读取任务、上下文和本地 API 记录")
             }
+            TimelineView(.periodic(from: .now, by: 1)) { tick in
+                if let error = monitor.taskReadError {
+                    Text(error).font(.caption2).foregroundStyle(.orange)
+                } else if let time = monitor.tasksReadAt {
+                    HStack(spacing: 3) {
+                        Text(tick.date.timeIntervalSince(time) > 20 ? "数据可能过期 · 读取于" : "读取于")
+                        Text(time, style: .relative)
+                        Spacer()
+                        Text("每 5 秒尝试更新")
+                    }.font(.caption2).foregroundStyle(.secondary)
+                } else { Text("等待首次读取").font(.caption2).foregroundStyle(.secondary) }
+            }
+            Text("Codex 本地任务累计计数；重复输入可能累计计入，子代理是否合入尚未核实。")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if monitor.taskRecords.isEmpty { Text("暂无任务记录").font(.caption).foregroundStyle(.secondary) }
             ForEach(Array(monitor.taskRecords.prefix(10))) { task in
+                Button { monitor.selectedContextTaskID = task.id } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "bubble.left.and.text.bubble.right")
                         .foregroundStyle(.secondary)
@@ -326,6 +352,9 @@ struct MonitorPanel: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                }
+                .buttonStyle(.plain).padding(.vertical, 3).usageHover()
+                .help("\(task.displayTitle)\n累计 \(task.tokens.formatted()) tokens\n任务更新时间：\(task.updatedAt.formatted())\n点击查看此任务上下文")
                 if task.id != monitor.taskRecords.prefix(10).last?.id { Divider() }
             }
         }
@@ -340,11 +369,21 @@ struct MonitorPanel: View {
                 Spacer()
                 HStack(spacing: 4) {
                     Circle().fill(monitor.apiMonitorAvailable ? Color.green : Color.orange).frame(width: 6, height: 6)
-                    Text(monitor.apiMonitorAvailable ? "本机监听中" : "未启动")
+                    Text(monitor.apiMonitorAvailable ? "接收端已启动" : "接收端未启动")
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
+            if let error = monitor.apiReadError { Text(error).font(.caption2).foregroundStyle(.orange) }
+            if let time = monitor.apiReadAt {
+                TimelineView(.periodic(from: .now, by: 1)) { tick in
+                    if tick.date.timeIntervalSince(time) > 20 {
+                        Text("API 数据可能过期，请刷新本地记录").font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+            }
+            Text("只统计已上报的调用；更换 API 地址不会自动接入。")
+                .font(.caption2).foregroundStyle(.secondary)
             ForEach(monitor.apiQuotaSummaries) { quota in
                 apiQuotaRow(quota)
                 if quota.id != monitor.apiQuotaSummaries.last?.id { Divider() }
@@ -372,6 +411,8 @@ struct MonitorPanel: View {
                             .font(.caption.monospacedDigit().weight(.semibold))
                         Text("tokens").font(.caption2).foregroundStyle(.secondary)
                     }
+                    .padding(.vertical, 3).usageHover()
+                    .help("\(record.displayTaskName)\n\(record.model) · \(record.totalTokens.formatted()) tokens\n来源：\(record.source)")
                     if record.id != monitor.apiRecords.prefix(8).last?.id { Divider() }
                 }
             }
@@ -385,7 +426,7 @@ struct MonitorPanel: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(quota.displayName).font(.caption.weight(.semibold))
-                    Text("已使用 \(compact(quota.usedTokens)) tokens")
+                    Text("已记录 \(compact(quota.usedTokens)) tokens")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -399,6 +440,15 @@ struct MonitorPanel: View {
                     )
                 }
             }
+            if let activity = monitor.apiActivity[quota.provider] {
+                HStack {
+                    Text("已收到 \(activity.count) 条记录")
+                    Spacer()
+                    Text("最近记录 ") + Text(activity.lastReceivedAt, style: .relative)
+                }.font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Text("等待首次上报 · 尚不能判断实际消耗").font(.caption2).foregroundStyle(.orange)
+            }
             if let remaining = quota.remainingTokens,
                let budget = quota.budgetTokens,
                let remainingPercent = quota.remainingPercent {
@@ -407,12 +457,12 @@ struct MonitorPanel: View {
                 HStack {
                     Text("剩余 \(compact(remaining))")
                     Spacer()
-                    Text("总额度 \(compact(budget)) tokens")
+                    Text("本地预算 \(compact(budget)) tokens")
                 }
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
             } else {
-                Text("在设置中填写 Token 总额度后计算剩余量")
+                Text("可在设置中填写本地 Token 预算")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -460,15 +510,16 @@ struct MonitorPanel: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("API Token 总额度").font(.subheadline)
+                    Text("本地 API Token 预算").font(.subheadline)
                     TextField("OpenAI，例如 1000000", text: $monitor.openAIBudgetText)
                         .textFieldStyle(.roundedBorder)
                     TextField("DeepSeek，例如 1000000", text: $monitor.deepSeekBudgetText)
                         .textFieldStyle(.roundedBorder)
-                    Text("累计已用量来自本机 API usage 记录；剩余量 = 总额度 − 累计已用量。")
+                    Text("仅接受正整数；留空或无效时不显示余量。剩余预算 = 本地预算 − 已记录用量，不代表账户余额。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                APIChannelSettings(monitor: monitor)
                 HStack {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("本机记录端点").font(.subheadline)
@@ -491,9 +542,9 @@ struct MonitorPanel: View {
             Group {
                 Divider()
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("只保存用量数字，不读取或保存对话正文", systemImage: "lock.shield")
+                    Label("只提取本地用量元数据，不保存对话正文", systemImage: "lock.shield")
                     Label("额外刷新只提醒，不会自动兑换", systemImage: "hand.raised")
-                    Label("任务每 5 秒、账户额度每 30 秒刷新", systemImage: "clock.arrow.circlepath")
+                    Label("任务每 5 秒、账户额度每 30 秒尝试刷新", systemImage: "clock.arrow.circlepath")
                     Label("本机保存任务名称与 Token 数，不保存对话正文", systemImage: "text.badge.checkmark")
                 }
                 .font(.caption)
@@ -506,7 +557,7 @@ struct MonitorPanel: View {
     private var footer: some View {
         HStack {
             if monitor.snapshot.capturedAt > .distantPast {
-                Text("更新于 ") + Text(monitor.snapshot.capturedAt, style: .relative)
+                Text("额度更新于 ") + Text(monitor.snapshot.capturedAt, style: .relative)
             } else {
                 Text("尚未更新")
             }
@@ -517,7 +568,8 @@ struct MonitorPanel: View {
             }
             .buttonStyle(.plain)
             .disabled(monitor.isRefreshing)
-            .help("立即刷新")
+            .help("刷新账户额度与本地记录")
+            .usageHover()
             Menu {
                 Button("退出 Token监测") { NSApplication.shared.terminate(nil) }
             } label: {

@@ -1,9 +1,11 @@
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -94,6 +96,129 @@ class UsageStoreTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["task_name"], "测试 API 任务")
         self.assertEqual(rows[0]["total_tokens"], 150)
+
+
+    def test_current_thread_protocol_whitelists_metadata_and_preserves_missing(self):
+        self.store.save_thread_usage({
+            "threadId": "current", "prompt": "PRIVATE PROMPT", "response": "PRIVATE RESPONSE",
+            "tokenUsage": {
+                "total": {"inputTokens": 900, "cachedInputTokens": 700, "outputTokens": 100,
+                          "reasoningOutputTokens": 30, "totalTokens": 1000, "text": "PRIVATE TEXT"},
+                "last": {"inputTokens": 90, "outputTokens": 10, "totalTokens": 100},
+                "modelContextWindow": 200000}})
+        with self.store._connect() as conn:
+            row = dict(conn.execute("SELECT * FROM thread_usage").fetchone())
+        self.assertEqual(row["total_tokens"], 1000)
+        self.assertEqual(row["reasoning_tokens"], 30)
+        metadata = json.loads(row["raw_json"])
+        self.assertEqual(metadata["last"]["total"], 100)
+        self.assertIsNone(metadata["last"]["cached"])
+        self.assertEqual(metadata["modelContextWindow"], 200000)
+        self.assertNotIn("PRIVATE", row["raw_json"])
+        self.store.save_thread_usage({"threadId": "empty", "tokenUsage": {"total": None, "last": None}})
+        with self.store._connect() as conn:
+            row = conn.execute("SELECT * FROM thread_usage WHERE thread_id='empty'").fetchone()
+        self.assertIsNone(row["total_tokens"])
+        self.assertIsNone(row["input_tokens"])
+
+    def test_legacy_thread_flat_and_invalid_counts(self):
+        self.store.save_thread_usage({"thread_id": "legacy", "input_tokens": 5,
+                                     "output_tokens": True, "total_tokens": -1,
+                                     "reasoning_output_tokens": 2})
+        with self.store._connect() as conn:
+            row = conn.execute("SELECT * FROM thread_usage").fetchone()
+        self.assertEqual(row["input_tokens"], 5)
+        self.assertEqual(row["reasoning_tokens"], 2)
+        self.assertIsNone(row["output_tokens"])
+        self.assertIsNone(row["total_tokens"])
+
+    def test_api_stream_final_subsets_and_channel_deduplication(self):
+        payload = {"provider": "relay-a", "request_id": "same", "source": "stream_final",
+                   "usage": {"input_tokens": 100, "output_tokens": 20,
+                             "input_tokens_details": {"cached_tokens": 80},
+                             "output_tokens_details": {"reasoning_tokens": 10}}}
+        saved = self.store.save_api_usage(payload)
+        self.assertEqual(saved["totalTokens"], 120)
+        self.assertEqual(saved["source"], "stream_final")
+        self.assertFalse(self.store.save_api_usage(payload)["recorded"])
+        self.assertTrue(self.store.save_api_usage(dict(payload, provider="relay-b"))["recorded"])
+        self.assertEqual(len(self.store.api_usage_history()), 2)
+
+    def test_api_missing_final_usage_and_invalid_metadata_never_write(self):
+        base = {"provider": "relay-a", "request_id": "req", "source": "stream_final"}
+        cases = [dict(base, usage=None), dict(base, usage={}),
+                 dict(base, usage={"input_tokens": 10}),
+                 dict(base, usage={"input_tokens": 10, "output_tokens": True}),
+                 dict(base, usage={"total_tokens": 1.2}),
+                 dict(base, usage={"total_tokens": 2**64}),
+                 dict(base, usage={"total_tokens": 10, "input_tokens_details": []}),
+                 dict(base, source="estimated", usage={"total_tokens": 10}),
+                 dict(base, model={"text": "secret"}, usage={"total_tokens": 10}),
+                 dict(base, capturedAt="today", usage={"total_tokens": 10}),
+                 dict(base, request_id=None, usage={"total_tokens": 10}),
+                 dict(base, usage={"input_tokens": 10, "output_tokens": 2,
+                                   "cached_input_tokens": 11}),
+                 dict(base, usage={"input_tokens": 10, "output_tokens": 2,
+                                   "reasoning_tokens": 3}),
+                 dict(base, usage={"input_tokens": 10, "output_tokens": 2, "total_tokens": 5})]
+        for payload in cases:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                self.store.save_api_usage(payload)
+        self.assertEqual(self.store.api_usage_history(), [])
+
+    def test_api_stores_only_whitelisted_metadata(self):
+        self.store.save_api_usage({"usage": {"total_tokens": 10, "text": "PRIVATE"},
+                                   "prompt": "PRIVATE", "api_key": "PRIVATE"})
+        with self.store._connect() as conn:
+            rows = [dict(row) for row in conn.execute("SELECT * FROM api_usage")]
+        self.assertNotIn("PRIVATE", json.dumps(rows))
+
+
+class TaskHistoryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.store = UsageStore(self.home / "monitor")
+
+    def make_database(self, name, thread_id, display_name=None):
+        path = self.home / name
+        with sqlite3.connect(path) as conn:
+            conn.execute("""CREATE TABLE threads(id TEXT, name TEXT, title TEXT, tokens_used INTEGER,
+                         created_at INTEGER, updated_at INTEGER, model TEXT, archived INTEGER,
+                         thread_source TEXT, agent_role TEXT)""")
+            conn.execute("CREATE TABLE thread_spawn_edges(child_thread_id TEXT)")
+            conn.execute("INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?)",
+                         (thread_id, display_name, "PRIVATE INITIAL PROMPT BODY", 100, 1, 2, "model", 0, "user", None))
+        return path
+
+    def test_custom_home_uses_numeric_state_version(self):
+        self.make_database("state_9.sqlite", "old-task", "Old")
+        self.make_database("state_10.sqlite", "new-task", "New")
+        self.make_database("state_other.sqlite", "invalid-task", "Ignore")
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.home), "CODEX_STATE_DB": ""}):
+            rows = self.store.codex_task_history()
+        self.assertEqual([row["id"] for row in rows], ["new-task"])
+        self.assertEqual(rows[0]["title"], "New")
+
+    def test_state_override_wins_and_read_preserves_source(self):
+        explicit = self.make_database("explicit # source.sqlite", "explicit-task", "Chosen")
+        self.make_database("state_10.sqlite", "other-task", "Other")
+        before = explicit.read_bytes()
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.home), "CODEX_STATE_DB": str(explicit)}):
+            rows = self.store.codex_task_history()
+        self.assertEqual(rows[0]["id"], "explicit-task")
+        self.assertEqual(before, explicit.read_bytes())
+
+    def test_missing_name_never_returns_initial_prompt_title(self):
+        database = self.make_database("state_10.sqlite", "12345678-rest")
+        with sqlite3.connect(database) as conn:
+            conn.execute("INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?)",
+                         ("abcdefgh-rest", "   ", "ANOTHER PRIVATE PROMPT", 200, 1, 3, "", 0, "user", None))
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.home), "CODEX_STATE_DB": ""}):
+            rows = self.store.codex_task_history()
+        self.assertEqual([row["title"] for row in rows], ["未命名任务 abcdefgh", "未命名任务 12345678"])
+        self.assertNotIn("PRIVATE", json.dumps(rows))
 
 
 class AlertConfigurationTests(unittest.TestCase):

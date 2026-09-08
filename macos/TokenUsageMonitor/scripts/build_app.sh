@@ -29,6 +29,7 @@ install -m 755 "$binary_path" "$app_path/Contents/MacOS/TokenUsageMonitor"
 install -m 644 "$project_dir/AppInfo.plist" "$app_path/Contents/Info.plist"
 install -m 644 "$project_dir/../../scripts/token_monitor.py" "$app_path/Contents/Resources/token_monitor.py"
 install -m 644 "$project_dir/../../scripts/api_usage_server.py" "$app_path/Contents/Resources/api_usage_server.py"
+install -m 644 "$project_dir/../../scripts/context_snapshot.py" "$app_path/Contents/Resources/context_snapshot.py"
 
 icon_source="$project_dir/Assets/AppIcon-master.png"
 if [[ -f "$icon_source" ]]; then

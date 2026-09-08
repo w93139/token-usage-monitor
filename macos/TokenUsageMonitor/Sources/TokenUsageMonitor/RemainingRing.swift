@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct RemainingRing: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let remainingPercent: Double?
     let size: CGFloat
     let lineWidth: CGFloat
@@ -29,7 +30,7 @@ struct RemainingRing: View {
                     )
                     .rotationEffect(.degrees(-90))
                     .shadow(color: .black.opacity(0.3), radius: 1)
-                    .animation(.easeInOut(duration: 0.3), value: normalized)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: normalized)
             }
             if showsValue {
                 Text(displayValue)
