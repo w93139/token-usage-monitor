@@ -21,7 +21,8 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var contextSelection = ContextTaskSelection()
     @Published private(set) var isRefreshingContext = false
     @Published private(set) var contextReadAt: Date?
-    @Published private(set) var subscriptionRenewalDate: Date?
+    @Published private(set) var subscriptionAnchor: CalendarDate?
+    var subscriptionRenewalDate: Date? { subscriptionAnchor?.date(in: .current) }
     var selectedContextTask: TaskUsageRecord? { contextSelection.selected(in: taskRecords) }
     var contextHistory: [TaskUsageRecord] { contextSelection.history(in: taskRecords) }
     @Published private(set) var apiChannels: [APIChannel] = []
@@ -87,7 +88,7 @@ final class MonitorStore: ObservableObject {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         dataDirectory = support.appendingPathComponent("Token Usage Monitor", isDirectory: true)
         snapshotURL = dataDirectory.appendingPathComponent("menu-snapshot.json")
-        subscriptionRenewalDate = defaults.object(forKey: "subscription.nextRenewalDate") as? Date
+        subscriptionAnchor = SubscriptionPreferences(defaults: defaults).loadAnchor()
         taskRecordsURL = dataDirectory.appendingPathComponent("task-usage.json")
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dataDirectory.path)
@@ -500,9 +501,8 @@ final class MonitorStore: ObservableObject {
     }
 
     func setSubscriptionRenewalDate(_ date: Date?) {
-        subscriptionRenewalDate = date.map { Calendar.current.startOfDay(for: $0) }
-        if let date = subscriptionRenewalDate { defaults.set(date, forKey: "subscription.nextRenewalDate") }
-        else { defaults.removeObject(forKey: "subscription.nextRenewalDate") }
+        subscriptionAnchor = date.flatMap { CalendarDate(date: $0) }
+        SubscriptionPreferences(defaults: defaults).saveAnchor(subscriptionAnchor)
     }
 
     func refreshContext() {

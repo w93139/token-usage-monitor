@@ -1,21 +1,6 @@
 import AppKit
 import SwiftUI
 
-struct HoverFeedback: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
-    func body(content: Content) -> some View {
-        content
-            .background(hovered ? Color.primary.opacity(0.065) : Color.clear, in: RoundedRectangle(cornerRadius: 7))
-            .onHover { hovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: hovered)
-    }
-}
-
-extension View {
-    func usageHover() -> some View { modifier(HoverFeedback()) }
-}
-
 struct ContextUsageCard: View {
     @ObservedObject var monitor: MonitorStore
 
@@ -27,7 +12,7 @@ struct ContextUsageCard: View {
                 Spacer()
                 if monitor.contextSelection.pinnedID != nil {
                     Button("返回最近活动") { monitor.selectContextTask(nil) }
-                        .font(.caption).usageHover()
+                        .font(.caption)
                 }
             }
             if let task = monitor.selectedContextTask {
@@ -80,7 +65,7 @@ struct ContextUsageCard: View {
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard()
     }
 }
 
@@ -108,13 +93,13 @@ struct APIChannelSettings: View {
                 } label: {
                     HStack { Text(channel.name); Spacer(); Text(channel.id).foregroundStyle(.secondary); Image(systemName: "pencil") }
                         .font(.caption).padding(5)
-                }.buttonStyle(.plain).usageHover().help("编辑渠道；同一标识保存会更新配置，保留全部用量记录")
+                }.buttonStyle(GlassButtonStyle(compact: true)).help("编辑渠道；同一标识保存会更新配置，保留全部用量记录")
                 Button {
                     monitor.removeChannel(channel.id)
                     if channelID == channel.id { channelID = ""; channelName = ""; budgetText = "" }
                     feedback = "配置已移除，用量记录保留"; saved = true
                 } label: { Image(systemName: "xmark.circle") }
-                    .buttonStyle(.borderless).usageHover().help("移除渠道配置，保留用量记录；可随时用相同标识重新添加")
+                    .buttonStyle(GlassButtonStyle(compact: true)).help("移除渠道配置，保留用量记录；可随时用相同标识重新添加")
                 }
             }
             TextField("渠道标识，例如 my-relay", text: $channelID).textFieldStyle(.roundedBorder)
@@ -124,7 +109,7 @@ struct APIChannelSettings: View {
                 if let error = monitor.saveChannel(id: channelID, name: channelName, budgetText: budgetText) {
                     feedback = error; saved = false
                 } else { feedback = "渠道已保存；上报时 provider 必须与渠道标识一致"; saved = true }
-            }.usageHover()
+            }
             if let feedback { Text(feedback).font(.caption2).foregroundStyle(saved ? Color.green : Color.orange) }
             if !monitor.apiChannels.isEmpty {
                 Picker("自定义菜单栏渠道", selection: $monitor.selectedAPIChannel) {
@@ -138,7 +123,7 @@ struct APIChannelSettings: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(monitor.ingestionExample(provider: provider), forType: .string)
                 copied = true
-            }.usageHover()
+            }
             .onChange(of: monitor.selectedAPIChannel) { _ in copied = false }
             Text("示例数字仅作格式说明，接入时替换为真实响应 usage，再由客户端发送至本机端点。流式调用需取得最终 usage；缺失时不能当作零消耗。")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -152,21 +137,23 @@ struct SubscriptionSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("月订阅续费日期").font(.headline)
-            DatePicker("下次续费日", selection: $date, displayedComponents: .date)
+            Text("月订阅预计续费").font(.headline)
+            DatePicker("首次已知续费日", selection: $date, displayedComponents: .date)
+                .environment(\.calendar, Calendar(identifier: .gregorian))
             HStack {
-                Button("保存续费日期") { monitor.setSubscriptionRenewalDate(date) }.usageHover()
-                if monitor.subscriptionRenewalDate != nil {
-                    Button("清除记录") { monitor.setSubscriptionRenewalDate(nil) }.usageHover()
+                Button("保存并按月推算") { monitor.setSubscriptionRenewalDate(date) }
+                if monitor.subscriptionAnchor != nil {
+                    Button("清除记录") { monitor.setSubscriptionRenewalDate(nil) }
                 }
             }
-            if let saved = monitor.subscriptionRenewalDate {
-                Text("已保存：\(saved.formatted(date: .abbreviated, time: .omitted))")
+            if let anchor = monitor.subscriptionRenewalDate {
+                Text("已保存基准：\(anchor.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("请按账户账单填写。此日期仅在本机记录，不是额度重置日；到期后需手动更新，不会自动扣款或推算续期。")
+            Text("填一次即可每月自动推算；短月取月末，之后恢复原日期。此日期仅在本机记录，不代表已扣款或订阅仍有效。取消、暂停、换账号或调整套餐后请修改或清除。")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+        .buttonStyle(GlassButtonStyle())
         .onAppear { date = monitor.subscriptionRenewalDate ?? Date() }
     }
 }

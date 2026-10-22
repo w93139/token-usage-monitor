@@ -24,7 +24,8 @@ struct MonitorPanel: View {
             footer
         }
         .frame(minWidth: 390, idealWidth: 420, minHeight: 540, idealHeight: 640)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(GlassBackground())
+        .buttonStyle(GlassButtonStyle())
     }
 
     private var header: some View {
@@ -56,16 +57,14 @@ struct MonitorPanel: View {
                 Image(systemName: presentationController.isQuotaBadgePinned ? "pin.fill" : "pin")
                     .frame(width: 20, height: 20)
             }
-            .buttonStyle(.borderless)
-            .usageHover()
+            .buttonStyle(GlassButtonStyle(compact: true))
             .foregroundStyle(presentationController.isQuotaBadgePinned ? Color.accentColor : Color.primary)
             .help(presentationController.isQuotaBadgePinned ? "隐藏顶部余量浮标" : "固定余量数字到屏幕顶部")
             Button { showsSettings.toggle() } label: {
                 Image(systemName: showsSettings ? "xmark" : "gearshape")
                     .frame(width: 20, height: 20)
             }
-            .buttonStyle(.borderless)
-            .usageHover()
+            .buttonStyle(GlassButtonStyle(compact: true))
             .help(showsSettings ? "返回" : "设置")
         }
         .padding(.horizontal, 16)
@@ -96,7 +95,7 @@ struct MonitorPanel: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(GlassButtonStyle(compact: true))
                 .foregroundStyle(.blue)
             }
 
@@ -118,13 +117,13 @@ struct MonitorPanel: View {
                         Label("显示 \(hiddenSupplementalCount) 个未使用的模型专属额度", systemImage: "plus.circle")
                             .font(.caption)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GlassButtonStyle(compact: true))
                     .foregroundStyle(.secondary)
                 } else if showsSupplementalLimits && supplementalWindows.count > 0 {
                     Button("隐藏未使用的模型专属额度") {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { showsSupplementalLimits = false }
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(GlassButtonStyle(compact: true))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
@@ -191,7 +190,7 @@ struct MonitorPanel: View {
             }
         }
         .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard()
     }
 
     private func summaryCard(_ account: AccountSummary) -> some View {
@@ -203,7 +202,7 @@ struct MonitorPanel: View {
             metric(title: "连续使用", value: account.currentStreakDays.map { "\($0) 天" } ?? "—")
         }
         .padding(.vertical, 10)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard()
     }
 
     private func metric(title: String, value: String) -> some View {
@@ -295,7 +294,7 @@ struct MonitorPanel: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoveredDailyUsage?.id)
         }
         .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard()
     }
 
     private var taskUsageCard: some View {
@@ -314,7 +313,7 @@ struct MonitorPanel: View {
                         Text("刷新")
                     }.font(.caption)
                 }
-                .disabled(monitor.isRefreshingTasks).usageHover()
+                .disabled(monitor.isRefreshingTasks)
                 .help("立即重新读取任务、上下文和本地 API 记录")
             }
             TimelineView(.periodic(from: .now, by: 1)) { tick in
@@ -366,17 +365,17 @@ struct MonitorPanel: View {
                         .foregroundStyle(.secondary)
                 }
                 }
-                .buttonStyle(.plain).padding(.vertical, 3).usageHover()
+                .buttonStyle(GlassButtonStyle(compact: true)).padding(.vertical, 3)
                 .help("\(task.displayTitle)\n累计 \(task.tokens.formatted()) tokens\n任务更新时间：\(task.updatedAt.formatted())\n点击查看此任务上下文")
                 if task.id != visible.last?.id { Divider() }
             }
             if taskSearch.isEmpty && history.count > 10 {
                 Button(showsAllTasks ? "收起任务列表" : "显示全部 \(history.count) 个其他任务") { showsAllTasks.toggle() }
-                    .font(.caption).usageHover()
+                    .font(.caption)
             }
         }
         .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard()
     }
 
     private var apiUsageCard: some View {
@@ -435,7 +434,7 @@ struct MonitorPanel: View {
             }
         }
         .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .glassCard()
     }
 
     private func apiQuotaRow(_ quota: APIQuotaSummary) -> some View {
@@ -586,10 +585,9 @@ struct MonitorPanel: View {
                 if monitor.isRefreshing { ProgressView().controlSize(.small) }
                 else { Image(systemName: "arrow.clockwise") }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(GlassButtonStyle(compact: true))
             .disabled(monitor.isRefreshing)
             .help("刷新账户额度与本地记录")
-            .usageHover()
             Menu {
                 Button("退出 Token监测") { NSApplication.shared.terminate(nil) }
             } label: {
@@ -601,12 +599,11 @@ struct MonitorPanel: View {
         TimelineView(.periodic(from: .now, by: 60)) { tick in
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "calendar")
-                if let date = monitor.subscriptionRenewalDate {
-                    Text("续费 \(date.formatted(date: .abbreviated, time: .omitted)) · \(SubscriptionRenewal.status(for: date, now: tick.date))")
-                        .foregroundStyle(SubscriptionRenewal.remainingDays(until: date, now: tick.date) < 0 ? Color.orange : Color.secondary)
-                } else { Text("月订阅：未设置续费日期") }
+                if let anchor = monitor.subscriptionAnchor, let date = MonthlyRenewal.next(anchor: anchor, now: tick.date) {
+                    Text("预计续费 \(date.formatted(date: .abbreviated, time: .omitted)) · \(SubscriptionRenewal.status(for: date, now: tick.date))")
+                } else { Text("月订阅：未设置预计续费日期") }
                 Spacer(minLength: 0)
-                Button("设置") { showsSettings = true }.buttonStyle(.plain).usageHover()
+                Button("设置") { showsSettings = true }.buttonStyle(GlassButtonStyle(compact: true))
             }.font(.caption2)
         }
         }

@@ -54,6 +54,11 @@ final class AppPresentationController: NSObject, ObservableObject, NSWindowDeleg
             defer: false
         )
         window.title = "Token监测"
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.hasShadow = true
         window.minSize = NSSize(width: 390, height: 540)
         window.isReleasedWhenClosed = false
         window.delegate = self

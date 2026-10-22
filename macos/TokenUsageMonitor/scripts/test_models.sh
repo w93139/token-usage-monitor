@@ -6,3 +6,8 @@ trap 'rm -rf "$test_dir"' EXIT
 swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" -parse-as-library \
   "$project_dir/Sources/TokenUsageMonitor/Models.swift" "$project_dir/Tests/ModelChecks.swift" -o "$test_dir/ModelChecks"
 "$test_dir/ModelChecks"
+swiftc -sdk "$(xcrun --sdk macosx --show-sdk-path)" -parse-as-library \
+  "$project_dir/Sources/TokenUsageMonitor/SubscriptionModels.swift" \
+  "$project_dir/Sources/TokenUsageMonitor/SubscriptionPreferences.swift" \
+  "$project_dir/Tests/SubscriptionChecks.swift" -o "$test_dir/SubscriptionChecks"
+"$test_dir/SubscriptionChecks"

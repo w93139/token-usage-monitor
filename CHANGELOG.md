@@ -2,6 +2,17 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.7.3] - 2026-10-23
+
+### Added
+
+- Once-entered monthly renewal estimates with remaining days, original-day anchoring across short months and Gregorian civil-date persistence; migrate the previous local date and support clearing.
+- A system frosted-glass window backdrop, lightweight tinted cards, and distinct button hover/press feedback that respect Reduce Transparency and Reduce Motion.
+
+### Changed
+
+- Label subscription dates as estimates and explain when to update them. Renewal tracking runs locally without website login, embedded browser processes or billing-page polling.
+
 ## [1.7.2] - 2026-10-23
 
 ### Added
