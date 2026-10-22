@@ -66,6 +66,16 @@ struct ContextUsageCard: View {
                 Text("暂无未归档的活动任务，可从下方选择历史任务。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            TimelineView(.periodic(from: .now, by: 1)) { tick in
+                if monitor.isRefreshingContext {
+                    Text("正在读取本地上下文…").font(.caption2).foregroundStyle(.secondary)
+                } else if let read = monitor.contextReadAt {
+                    HStack(spacing: 3) {
+                        Text(tick.date.timeIntervalSince(read) > 20 ? "读取可能中断 · 检查于" : "本地监测中 · 检查于")
+                        Text(read, style: .relative)
+                    }.font(.caption2).foregroundStyle(tick.date.timeIntervalSince(read) > 20 ? Color.orange : Color.secondary)
+                }
+            }
             Text("按本地任务更新时间跟随，不代表 Codex 前台任务。这里是最近上报的上下文快照，压缩或继续执行后可能变化。")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
@@ -133,5 +143,30 @@ struct APIChannelSettings: View {
             Text("示例数字仅作格式说明，接入时替换为真实响应 usage，再由客户端发送至本机端点。流式调用需取得最终 usage；缺失时不能当作零消耗。")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+struct SubscriptionSettings: View {
+    @ObservedObject var monitor: MonitorStore
+    @State private var date = Date()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("月订阅续费日期").font(.headline)
+            DatePicker("下次续费日", selection: $date, displayedComponents: .date)
+            HStack {
+                Button("保存续费日期") { monitor.setSubscriptionRenewalDate(date) }.usageHover()
+                if monitor.subscriptionRenewalDate != nil {
+                    Button("清除记录") { monitor.setSubscriptionRenewalDate(nil) }.usageHover()
+                }
+            }
+            if let saved = monitor.subscriptionRenewalDate {
+                Text("已保存：\(saved.formatted(date: .abbreviated, time: .omitted))")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("请按账户账单填写。此日期仅在本机记录，不是额度重置日；到期后需手动更新，不会自动扣款或推算续期。")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .onAppear { date = monitor.subscriptionRenewalDate ?? Date() }
     }
 }

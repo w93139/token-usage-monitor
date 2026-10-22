@@ -30,7 +30,7 @@ class ContextSnapshotTests(unittest.TestCase):
                 'payload': {'type': kind, 'info': info}}
 
     def usage(self, tokens=120, window=200000):
-        return self.event({'last_token_usage': {'input_tokens': 100, 'output_tokens': 20,
+        return self.event({'last_token_usage': {'input_tokens': tokens - 20 if type(tokens) is int and tokens >= 20 else 100, 'output_tokens': 20,
                                                'cached_input_tokens': 70, 'reasoning_output_tokens': 10,
                                                'total_tokens': tokens},
                            'total_token_usage': {'total_tokens': 99999999},
@@ -65,6 +65,36 @@ class ContextSnapshotTests(unittest.TestCase):
         self.write(self.usage(), {'type': 'compacted', 'payload': {}})
         self.assertEqual(self.read()['error'], 'context_reset')
 
+    def test_post_compaction_estimate_unknown_until_measured_usage(self):
+        before = self.usage(223644, 258400)
+        reset = {'timestamp': '2026-09-08T16:21:34.976Z', 'type': 'compacted', 'payload': {}}
+        estimate = self.event({'last_token_usage': {'input_tokens': 0, 'output_tokens': 0,
+                                                  'total_tokens': 21277},
+                               'model_context_window': 258400})
+        estimate['timestamp'] = '2026-09-08T16:21:34.981Z'
+        self.write(before, reset, estimate)
+        result = self.read()
+        self.assertEqual(result['error'], 'context_estimated')
+        self.assertIsNone(result['tokens'])
+        measured = self.usage(34698, 258400)
+        measured['timestamp'] = '2026-09-08T16:21:42.968Z'
+        record = {'timestamp': '2026-09-08T16:21:42.965Z', 'type': 'token_usage_record',
+                  'payload': {'usage': measured['payload']['info']['last_token_usage']}}
+        self.write(before, reset, estimate, record, measured)
+        self.assertEqual(self.read()['tokens'], 34698)
+        # Old clients reporting only consistent token_count events still work.
+        self.write(before, reset, measured)
+        self.assertEqual(self.read()['tokens'], 34698)
+
+    def test_inconsistent_total_is_not_reported_as_measured_context(self):
+        event = self.usage()
+        event['payload']['info']['last_token_usage']['total_tokens'] = 125
+        self.write(event)
+        self.assertEqual(self.read()['error'], 'context_estimated')
+        event['payload']['info']['last_token_usage'] = {'total_tokens': 125}
+        self.write(event)
+        self.assertEqual(self.read()['tokens'], 125)
+
     def test_missing_or_invalid_window_and_counts_stay_unknown(self):
         for tokens, window in ((None, 200000), (120, None), (120, 0), (True, 200000), (-1, 200000)):
             self.write(self.usage(tokens, window))
@@ -92,6 +122,50 @@ class ContextSnapshotTests(unittest.TestCase):
         self.write(long_event, self.usage())
         self.assertEqual(self.read(max_tail_bytes=1000)['tokens'], 120)
         self.assertNotIn('PRIVATE', json.dumps(self.read(max_tail_bytes=1000)))
+
+    def test_exact_tail_boundary_keeps_complete_usage_and_reset(self):
+        prefix = {'type': 'response_item', 'payload': {'text': 'PRIVATE' * 500}}
+        for event, expected_error in ((self.usage(), None), (self.event(kind='context_compacted'), 'context_reset')):
+            with self.subTest(expected_error=expected_error):
+                self.write(prefix, event)
+                length = len((json.dumps(event) + '\n').encode())
+                snapshot = self.read(max_tail_bytes=length)
+                self.assertEqual(snapshot['error'], expected_error)
+                if expected_error is None:
+                    self.assertEqual(snapshot['tokens'], 120)
+
+    def test_paginated_task_in_old_directory_reads_appended_current_usage(self):
+        old_directory = self.rollout.parent / '2026' / '09' / '08'
+        old_directory.mkdir(parents=True)
+        self.rollout = old_directory / 'rollout.jsonl'
+        with sqlite3.connect(self.db) as conn:
+            conn.execute('ALTER TABLE threads ADD COLUMN history_mode TEXT')
+            conn.execute('UPDATE threads SET rollout_path=?, history_mode=?', (str(self.rollout), 'paginated'))
+        self.write(self.usage(120))
+        self.assertEqual(self.read()['capturedAt'], 1788868800)
+        current = self.usage(150000, 475000)
+        current['timestamp'] = '2026-10-22T21:13:42Z'
+        with self.rollout.open('a') as handle:
+            handle.write(json.dumps(self.event(kind='context_compacted')) + '\n')
+        self.assertEqual(self.read()['error'], 'context_reset')
+        with self.rollout.open('a') as handle:
+            handle.write(json.dumps(current) + '\n')
+        snapshot = self.read()
+        self.assertEqual(snapshot['tokens'], 150000)
+        self.assertEqual(snapshot['window'], 475000)
+        self.assertEqual(snapshot['capturedAt'], 1792703622)
+
+    def test_same_task_path_replacement_and_task_switch_do_not_reuse_snapshot(self):
+        self.write(self.usage(120))
+        self.assertEqual(self.read()['tokens'], 120)
+        second = self.home / 'sessions' / 'replacement.jsonl'
+        second.write_text(json.dumps(self.usage(240)) + '\n')
+        with sqlite3.connect(self.db) as conn:
+            conn.execute('UPDATE threads SET rollout_path=? WHERE id=?', (str(second), 'task-a'))
+            conn.execute('INSERT INTO threads VALUES (?,?)', ('task-b', str(self.rollout)))
+        self.assertEqual(self.read()['tokens'], 240)
+        self.assertEqual(read_snapshot('task-b', self.home, self.db)['tokens'], 120)
+        self.assertEqual(self.read()['tokens'], 240)
 
     def test_partial_or_corrupt_tail_does_not_claim_previous_usage_current(self):
         self.write(self.usage())

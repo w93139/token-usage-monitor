@@ -7,6 +7,7 @@ Only usage metadata is persisted. Prompt and response text are never requested o
 from __future__ import annotations
 
 import json
+import math
 import os
 import platform
 import queue
@@ -46,6 +47,13 @@ def find_codex_binary() -> str | None:
     override = os.environ.get("CODEX_BINARY")
     if override and Path(override).expanduser().is_file():
         return str(Path(override).expanduser())
+    # Prefer the desktop's current bundled CLI; a separately installed CLI may
+    # not share the desktop's current protocol/authentication support.
+    for base in (Path("/Applications"), Path.home() / "Applications"):
+        for suffix in ("codex-cli/bin/codex", "codex-cli/CodexCLI.app/Contents/MacOS/codex", "codex"):
+            candidate = base / "ChatGPT.app/Contents/Resources" / suffix
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
     found = shutil.which("codex")
     if found:
         return found
@@ -227,17 +235,24 @@ class UsageStore:
 
     @staticmethod
     def flatten_rate_limits(result: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(result, dict):
+            return []
         groups = result.get("rateLimitsByLimitId")
         if not groups:
             single = result.get("rateLimits")
-            groups = {str((single or {}).get("limitId") or "codex"): single} if single else {}
+            groups = {str(single.get("limitId") or "codex"): single} if isinstance(single, dict) else {}
+        if not isinstance(groups, dict):
+            return []
         rows: list[dict[str, Any]] = []
         for limit_id, payload in groups.items():
-            if not payload:
+            if not isinstance(payload, dict):
                 continue
             for window_name in ("primary", "secondary"):
                 window = payload.get(window_name)
-                if not window:
+                if not isinstance(window, dict):
+                    continue
+                used = window.get("usedPercent")
+                if type(used) not in (int, float) or not 0 <= used <= 100 or not math.isfinite(used):
                     continue
                 rows.append(
                     {
@@ -676,6 +691,7 @@ class UsageMonitor:
         self._thread: threading.Thread | None = None
         self.last_refresh: int | None = None
         self.last_error: str | None = None
+        self._rate_limit_failures = 0
         if autostart:
             self.start()
 
@@ -724,29 +740,62 @@ class UsageMonitor:
             self.store.add_event("rate_limits_changed", "Codex reported a rate-limit change", params)
             self._refresh.set()
 
+    @staticmethod
+    def _authentication_failure(exc: Exception) -> bool:
+        # Inspect only for classification; never persist server error bodies,
+        # which can contain request headers or authentication details.
+        message = str(exc).casefold()
+        return any(marker in message for marker in (
+            "401", "unauthorized", "authentication", "unauthenticated",
+            "token expired", "token_expired", "expired token", "invalid token",
+            "invalid_token", "refresh_token", "sign in", "sign-in", "login required",
+        ))
+
     def collect_once(self) -> None:
         if not self.client:
             raise RuntimeError("collector is not connected")
-        any_success = False
+
+        def abort(message: str) -> None:
+            self.last_error = message
+            self.store.set_state("collector.last_error", message)
+            raise RuntimeError(message) from None
+
+        usage_ok = False
+        limits_ok = False
         try:
             usage = self.client.request("account/usage/read")
             self.store.save_usage(usage)
-            any_success = True
+            usage_ok = True
         except Exception as exc:
-            self.store.log(f"account usage unavailable: {exc}")
+            if self._authentication_failure(exc):
+                abort("Codex authentication expired or unavailable; reconnecting to refresh account access")
+            self.store.log("account usage unavailable; preserving previous account data")
         try:
             limits = self.client.request("account/rateLimits/read")
+            if not self.store.flatten_rate_limits(limits):
+                raise ValueError("No valid rate-limit windows")
             rows, credits = self.store.save_rate_limits(limits)
             self._evaluate_alerts(rows, credits, limits)
-            any_success = True
+            limits_ok = True
+            self._rate_limit_failures = 0
         except Exception as exc:
-            self.store.log(f"rate limits unavailable: {exc}")
-        if not any_success:
-            raise RuntimeError("Codex account usage and rate-limit endpoints are unavailable")
+            self._rate_limit_failures += 1
+            if self._authentication_failure(exc):
+                abort("Codex authentication expired or unavailable; reconnecting to refresh quota access")
+            self.store.log("rate limits unavailable; preserving previous quota data")
+            if self._rate_limit_failures >= 3:
+                abort("Codex quota refresh failed repeatedly; reconnecting (previous quota retained)")
+        if not usage_ok and not limits_ok:
+            abort("Codex account usage and rate-limit endpoints are unavailable; reconnecting")
         self.last_refresh = _now()
-        self.last_error = None
+        if not limits_ok:
+            self.last_error = "Codex account usage refreshed, but quota is unavailable; previous quota retained"
+        elif not usage_ok:
+            self.last_error = "Codex quota refreshed, but account usage is unavailable"
+        else:
+            self.last_error = None
         self.store.set_state("collector.last_refresh", str(self.last_refresh))
-        self.store.set_state("collector.last_error", "")
+        self.store.set_state("collector.last_error", self.last_error or "")
 
     def _thresholds(self) -> list[int]:
         raw = self.store.get_state("notifications.thresholds", "[80,95,100]") or "[80,95,100]"

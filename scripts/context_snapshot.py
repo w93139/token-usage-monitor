@@ -86,15 +86,22 @@ def read_snapshot(thread_id: str, codex_home: Path | None = None,
             handle.seek(0, 2)
             size = handle.tell()
             start = max(0, size - max_tail_bytes)
+            # A bounded tail can begin exactly at a complete event. Discard only
+            # a partial first line; dropping a complete usage/reset event would
+            # incorrectly hide the newest observable context state.
+            partial_first_line = False
+            if start:
+                handle.seek(start - 1)
+                partial_first_line = handle.read(1) != b"\n"
             handle.seek(start)
-            data = handle.read(max_tail_bytes)
+            data = handle.read(min(max_tail_bytes, size - start))
     except (OSError, ValueError):
         return unknown("rollout_unavailable")
     if data and not data.endswith(b"\n"):
         return unknown("rollout_incomplete")
     lines = data.splitlines()
-    if start:
-        lines = lines[1:]  # first line may be a truncated JSON object
+    if partial_first_line:
+        lines = lines[1:]
     for line in reversed(lines):
         try:
             event = json.loads(line)
@@ -123,6 +130,13 @@ def read_snapshot(thread_id: str, codex_home: Path | None = None,
         window = counter(info.get("model_context_window"))
         if tokens is None or window is None or window == 0:
             return unknown("incomplete_usage")
+        # Codex can emit a synthetic post-compaction estimate with zero input
+        # and output but a positive total. It is not a measured last call.
+        # Keep legacy token_count-only clients compatible while refusing to
+        # label internally inconsistent counters as an exact usage snapshot.
+        inp, out = counter(last.get("input_tokens")), counter(last.get("output_tokens"))
+        if inp is not None and out is not None and tokens != inp + out:
+            return unknown("context_estimated")
         if result["capturedAt"] is None:
             return unknown("invalid_timestamp")
         result.update(tokens=tokens, window=window)

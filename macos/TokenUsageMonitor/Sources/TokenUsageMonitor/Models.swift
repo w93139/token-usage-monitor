@@ -1,10 +1,62 @@
 import Foundation
+import CoreFoundation
+
+enum QuotaRefreshPolicy {
+    static func isAuthenticationFailure(_ errors: [Error]) -> Bool {
+        errors.contains {
+            let text = $0.localizedDescription.lowercased()
+            return ["401", "unauthorized", "token_expired", "authentication token has expired"].contains { text.contains($0) }
+        }
+    }
+
+    static func shouldReconnect(failures: Int, errors: [Error]) -> Bool {
+        failures >= 3 || isAuthenticationFailure(errors) || errors.contains {
+            if let error = $0 as? MonitorError, case .processEnded = error { return true }
+            return false
+        }
+    }
+
+    static func windows(from limits: [String: Any]) -> [RateWindow] {
+        let groups: [String: Any]
+        if let value = limits.dictionary("rateLimitsByLimitId") { groups = value }
+        else if let value = limits.dictionary("rateLimits") { groups = [value.string("limitId") ?? "codex": value] }
+        else { return [] }
+        var result: [RateWindow] = []
+        for (id, raw) in groups {
+            guard let group = raw as? [String: Any] else { continue }
+            for name in ["primary", "secondary"] {
+                guard let item = group.dictionary(name), let percent = item["usedPercent"] as? NSNumber,
+                      CFGetTypeID(percent) != CFBooleanGetTypeID(), percent.doubleValue.isFinite,
+                      percent.doubleValue >= 0, percent.doubleValue <= 100 else { continue }
+                result.append(RateWindow(limitID: group.string("limitId") ?? id, limitName: group.string("limitName"),
+                    windowName: name, usedPercent: percent.doubleValue, durationMinutes: item.integer("windowDurationMins"),
+                    resetsAt: item.integer("resetsAt").map { Date(timeIntervalSince1970: TimeInterval($0)) }))
+            }
+        }
+        return result.sorted {
+            if ($0.limitID == "codex") != ($1.limitID == "codex") { return $0.limitID == "codex" }
+            return $0.id < $1.id
+        }
+    }
+}
 
 struct AccountSummary: Codable, Equatable {
     var lifetimeTokens: Int?
     var peakDailyTokens: Int?
     var currentStreakDays: Int?
     var longestStreakDays: Int?
+}
+
+enum SubscriptionRenewal {
+    static func remainingDays(until date: Date, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
+    }
+
+    static func status(for date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let days = remainingDays(until: date, now: now, calendar: calendar)
+        if days < 0 { return "日期已过，请更新" }
+        return days == 0 ? "今天续费" : "剩余 \(days) 天"
+    }
 }
 
 struct DailyUsage: Codable, Identifiable, Equatable {
@@ -101,6 +153,8 @@ struct ContextSnapshot: Decodable, Equatable {
     var unavailableReason: String {
         switch error {
         case "context_reset": return "上下文已压缩或清空，等待下一次用量上报"
+        case "context_estimated": return "目前只有压缩后的估计值，等待下一次调用的准确统计"
+        case "read_failed": return "上下文读取失败，正在重试；不会继续展示旧任务数据"
         default: return "暂未取得可用的上下文统计；不会用任务累计值代替"
         }
     }
@@ -231,6 +285,54 @@ struct UsageSnapshot: Codable, Equatable {
     var dailyUsage: [DailyUsage]
     var rateWindows: [RateWindow]
     var availableResetCredits: Int
+
+    func hasFreshQuota(at date: Date = Date()) -> Bool {
+        !rateWindows.isEmpty && date.timeIntervalSince(capturedAt) >= 0 && date.timeIntervalSince(capturedAt) <= 90
+    }
+
+    static func refreshed(
+        usage: [String: Any],
+        limits: [String: Any],
+        fallback: UsageSnapshot, now: Date = Date()
+    ) -> UsageSnapshot {
+        let summaryObject = usage.dictionary("summary")
+        let account = summaryObject.map {
+            AccountSummary(
+                lifetimeTokens: $0.integer("lifetimeTokens"),
+                peakDailyTokens: $0.integer("peakDailyTokens"),
+                currentStreakDays: $0.integer("currentStreakDays"),
+                longestStreakDays: $0.integer("longestStreakDays")
+            )
+        } ?? fallback.account
+        let parsedDays = usage.array("dailyUsageBuckets").compactMap { item -> DailyUsage? in
+            guard let date = item.string("startDate"), let tokens = item.integer("tokens") else { return nil }
+            return DailyUsage(date: date, tokens: tokens)
+        }.sorted { $0.date < $1.date }
+        let days = usage.isEmpty ? fallback.dailyUsage : parsedDays
+
+        let parsedWindows = QuotaRefreshPolicy.windows(from: limits)
+        let validQuota = !parsedWindows.isEmpty
+        let windows = validQuota ? parsedWindows : fallback.rateWindows
+        let resetCredits: Int
+        if !validQuota {
+            resetCredits = fallback.availableResetCredits
+        } else if let availableCount = limits.dictionary("rateLimitResetCredits")?.integer("availableCount") {
+            resetCredits = availableCount
+        } else {
+            // Reset-credit metadata can be absent from an otherwise successful
+            // response. Keep the last known value instead of briefly dropping
+            // to zero and notifying again when the field reappears.
+            resetCredits = fallback.availableResetCredits
+        }
+        return UsageSnapshot(
+            capturedAt: validQuota ? now : fallback.capturedAt,
+            account: account,
+            dailyUsage: days,
+            rateWindows: windows,
+            availableResetCredits: resetCredits
+        )
+    }
+
 
     static let empty = UsageSnapshot(
         capturedAt: .distantPast,

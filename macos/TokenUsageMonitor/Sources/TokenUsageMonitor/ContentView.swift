@@ -153,6 +153,7 @@ struct MonitorPanel: View {
             HStack(alignment: .center) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(window.displayName).font(.subheadline.weight(.semibold))
+                    if !monitor.quotaIsCurrent { Text("历史记录").font(.caption2).foregroundStyle(.orange) }
                     if window.limitID != "codex" {
                         Text("模型专属").font(.caption2).padding(.horizontal, 5).padding(.vertical, 2)
                             .background(Color.blue.opacity(0.12), in: Capsule())
@@ -163,19 +164,20 @@ struct MonitorPanel: View {
                 }
                 Spacer()
                 RemainingRing(
-                    remainingPercent: window.remainingPercent,
+                    remainingPercent: monitor.quotaIsCurrent ? window.remainingPercent : nil,
                     size: 58,
                     lineWidth: 5,
                     fontSize: 13
                 )
             }
             ProgressView(value: window.remainingPercent, total: 100)
-                .tint(remainingColor(window.remainingPercent))
+                .tint(monitor.quotaIsCurrent ? remainingColor(window.remainingPercent) : .gray)
             HStack {
-                Text("已使用 \(Int(window.usedPercent.rounded()))%")
+                Text("\(monitor.quotaIsCurrent ? "已使用" : "上次已使用") \(Int(window.usedPercent.rounded()))%")
                 Spacer()
                 if let reset = window.resetsAt {
-                    Text("刷新 ") + Text(reset, style: .relative)
+                    if reset > Date() { Text("刷新 ") + Text(reset, style: .relative) }
+                    else { Text("重置时间已过，等待更新").foregroundStyle(.orange) }
                 } else {
                     Text("刷新时间未知")
                 }
@@ -486,6 +488,8 @@ struct MonitorPanel: View {
 
     private var settings: some View {
         VStack(alignment: .leading, spacing: 16) {
+            SubscriptionSettings(monitor: monitor)
+            Divider()
             Group {
                 Text("提醒设置").font(.headline)
                 Toggle("系统通知", isOn: $monitor.notificationsEnabled)
@@ -570,6 +574,7 @@ struct MonitorPanel: View {
     }
 
     private var footer: some View {
+        VStack(alignment: .leading, spacing: 8) {
         HStack {
             if monitor.snapshot.capturedAt > .distantPast {
                 Text("额度更新于 ") + Text(monitor.snapshot.capturedAt, style: .relative)
@@ -592,6 +597,18 @@ struct MonitorPanel: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+        }
+        TimelineView(.periodic(from: .now, by: 60)) { tick in
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "calendar")
+                if let date = monitor.subscriptionRenewalDate {
+                    Text("续费 \(date.formatted(date: .abbreviated, time: .omitted)) · \(SubscriptionRenewal.status(for: date, now: tick.date))")
+                        .foregroundStyle(SubscriptionRenewal.remainingDays(until: date, now: tick.date) < 0 ? Color.orange : Color.secondary)
+                } else { Text("月订阅：未设置续费日期") }
+                Spacer(minLength: 0)
+                Button("设置") { showsSettings = true }.buttonStyle(.plain).usageHover()
+            }.font(.caption2)
+        }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

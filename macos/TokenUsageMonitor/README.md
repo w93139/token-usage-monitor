@@ -2,7 +2,9 @@
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
-## Version 1.7.1
+## Version 1.7.2
+
+Recovers quota collection after desktop CLI relocation or authentication expiry. Invalid quota responses preserve the previous timestamp and appear as historical. Context polling freshness is distinct from usage-event freshness; synthetic post-compaction estimates remain unknown until measured counters arrive.
 
 Context switching now uses one searchable history list, excluding the selected task. Automatic mode follows the latest updated non-archived task; manual history selection stays fixed until returning or disappearing from available records. Same-name tasks retain separate short IDs. Context reads run independently and discard obsolete requests during rapid switching.
 

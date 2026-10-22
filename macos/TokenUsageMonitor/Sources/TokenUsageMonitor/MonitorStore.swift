@@ -20,6 +20,8 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var contextSnapshot: ContextSnapshot?
     @Published private(set) var contextSelection = ContextTaskSelection()
     @Published private(set) var isRefreshingContext = false
+    @Published private(set) var contextReadAt: Date?
+    @Published private(set) var subscriptionRenewalDate: Date?
     var selectedContextTask: TaskUsageRecord? { contextSelection.selected(in: taskRecords) }
     var contextHistory: [TaskUsageRecord] { contextSelection.history(in: taskRecords) }
     @Published private(set) var apiChannels: [APIChannel] = []
@@ -85,6 +87,7 @@ final class MonitorStore: ObservableObject {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         dataDirectory = support.appendingPathComponent("Token Usage Monitor", isDirectory: true)
         snapshotURL = dataDirectory.appendingPathComponent("menu-snapshot.json")
+        subscriptionRenewalDate = defaults.object(forKey: "subscription.nextRenewalDate") as? Date
         taskRecordsURL = dataDirectory.appendingPathComponent("task-usage.json")
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dataDirectory.path)
@@ -142,7 +145,10 @@ final class MonitorStore: ObservableObject {
 
     var menuBarRemainingPercent: Double? {
         switch menuQuotaSource {
-        case .codex: return primaryWindow?.remainingPercent
+        case .codex:
+            guard quotaIsCurrent, let window = primaryWindow,
+                  window.resetsAt.map({ $0 > Date() }) ?? true else { return nil }
+            return window.remainingPercent
         case .openAI: return apiActivity["openai"] == nil ? nil : apiQuota(for: "openai").remainingPercent
         case .deepSeek: return apiActivity["deepseek"] == nil ? nil : apiQuota(for: "deepseek").remainingPercent
         case .custom:
@@ -150,6 +156,8 @@ final class MonitorStore: ObservableObject {
             return apiQuota(for: selectedAPIChannel).remainingPercent
         }
     }
+
+    var quotaIsCurrent: Bool { connectionState.isConnected && snapshot.hasFreshQuota() }
 
     var menuQuotaLabel: String {
         if menuQuotaSource == .codex { return menuQuotaSource.label }
@@ -278,7 +286,7 @@ final class MonitorStore: ObservableObject {
         guard !isRefreshing else { return }
         isRefreshing = true
         worker.async { [weak self] in
-            self?.collect(forceReconnect: false)
+            self?.collect(forceReconnect: true)
         }
     }
 
@@ -379,19 +387,23 @@ final class MonitorStore: ObservableObject {
             do { limits = try client.request(method: "account/rateLimits/read", timeout: 20) } catch { limitsError = error }
             do { usage = try client.request(method: "account/usage/read", timeout: 20) } catch { usageError = error }
 
+            let validQuota = !QuotaRefreshPolicy.windows(from: limits).isEmpty
+            if !validQuota && limitsError == nil { limitsError = MonitorError.invalidResponse }
+            let errors = [usageError, limitsError].compactMap { $0 }
+            consecutiveQuotaFailures = validQuota ? 0 : consecutiveQuotaFailures + 1
+            if QuotaRefreshPolicy.shouldReconnect(failures: consecutiveQuotaFailures, errors: errors) {
+                client.close()
+                self.client = nil
+            }
+            let quotaFailure = QuotaRefreshPolicy.isAuthenticationFailure(errors)
+                ? "额度连接的登录状态已失效，正在重新连接；持续失败时请在 ChatGPT 中重新登录。"
+                : "账户额度暂时无法更新，正在显示历史记录；本地任务与上下文会继续读取。"
+
             guard !usage.isEmpty || !limits.isEmpty else {
-                consecutiveQuotaFailures += 1
-                let shouldReconnect = [usageError, limitsError]
-                    .compactMap { $0 }
-                    .contains { self.isProcessEnded($0) }
-                if shouldReconnect {
-                    client.close()
-                    self.client = nil
-                }
                 let hasCachedQuota = !snapshot.rateWindows.isEmpty
                 DispatchQueue.main.async {
                     self.lastError = hasCachedQuota
-                        ? "账户额度暂时无法更新，正在显示上次数据；任务 Token 记录不受影响。"
+                        ? quotaFailure
                         : "暂时无法读取账户额度，应用会自动重试。"
                     self.isRefreshing = false
                     self.connectionState = hasCachedQuota ? .cached : .retrying("正在自动重试")
@@ -399,18 +411,17 @@ final class MonitorStore: ObservableObject {
                 return
             }
 
-            let updated = parseSnapshot(usage: usage, limits: limits, fallback: snapshot)
+            let updated = UsageSnapshot.refreshed(usage: usage, limits: limits, fallback: snapshot)
             let previous = snapshot
             persist(updated)
-            evaluateAlerts(previous: previous, current: updated)
-            consecutiveQuotaFailures = 0
+            if validQuota { evaluateAlerts(previous: previous, current: updated) }
             DispatchQueue.main.async {
                 self.snapshot = updated
-                self.lastError = limitsError == nil
+                self.lastError = validQuota
                     ? nil
-                    : "账户额度暂时无法更新，正在显示上次数据；任务 Token 记录不受影响。"
+                    : quotaFailure
                 self.isRefreshing = false
-                self.connectionState = limitsError == nil
+                self.connectionState = validQuota
                     ? .connected(client.connectionMode ?? "已连接")
                     : .cached
             }
@@ -427,12 +438,6 @@ final class MonitorStore: ObservableObject {
                 self.connectionState = hasCachedQuota ? .cached : .retrying("正在自动重试")
             }
         }
-    }
-
-    private func isProcessEnded(_ error: Error) -> Bool {
-        guard let monitorError = error as? MonitorError else { return false }
-        if case .processEnded = monitorError { return true }
-        return false
     }
 
     private func friendlyConnectionError(_ error: Error) -> String {
@@ -461,6 +466,7 @@ final class MonitorStore: ObservableObject {
                     self.contextSelection.reconcile(with: self.taskRecords)
                     if previousID != self.selectedContextTask?.id {
                         self.contextSnapshot = nil
+                        self.contextReadAt = nil
                         _ = self.contextSelection.beginRead() // Invalidate any previous task's in-flight result.
                     }
                     self.persistTaskRecords(self.taskRecords)
@@ -489,7 +495,14 @@ final class MonitorStore: ObservableObject {
     func selectContextTask(_ id: String?) {
         contextSelection.select(id)
         contextSnapshot = nil
+        contextReadAt = nil
         refreshContext()
+    }
+
+    func setSubscriptionRenewalDate(_ date: Date?) {
+        subscriptionRenewalDate = date.map { Calendar.current.startOfDay(for: $0) }
+        if let date = subscriptionRenewalDate { defaults.set(date, forKey: "subscription.nextRenewalDate") }
+        else { defaults.removeObject(forKey: "subscription.nextRenewalDate") }
     }
 
     func refreshContext() {
@@ -511,6 +524,7 @@ final class MonitorStore: ObservableObject {
                 guard !self.stopped else { return }
                 if self.contextSelection.accepts(request, threadID: task.id, records: self.taskRecords) {
                     self.contextSnapshot = value
+                    self.contextReadAt = Date()
                 }
                 if self.contextReadPending { self.refreshContext() }
             }
@@ -722,75 +736,6 @@ final class MonitorStore: ObservableObject {
         guard let data = try? JSONEncoder().encode(TaskRecordsCache(records: records)) else { return }
         try? data.write(to: taskRecordsURL, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: taskRecordsURL.path)
-    }
-
-    private func parseSnapshot(
-        usage: [String: Any],
-        limits: [String: Any],
-        fallback: UsageSnapshot
-    ) -> UsageSnapshot {
-        let summaryObject = usage.dictionary("summary")
-        let account = summaryObject.map {
-            AccountSummary(
-                lifetimeTokens: $0.integer("lifetimeTokens"),
-                peakDailyTokens: $0.integer("peakDailyTokens"),
-                currentStreakDays: $0.integer("currentStreakDays"),
-                longestStreakDays: $0.integer("longestStreakDays")
-            )
-        } ?? fallback.account
-        let parsedDays = usage.array("dailyUsageBuckets").compactMap { item -> DailyUsage? in
-            guard let date = item.string("startDate"), let tokens = item.integer("tokens") else { return nil }
-            return DailyUsage(date: date, tokens: tokens)
-        }.sorted { $0.date < $1.date }
-        let days = usage.isEmpty ? fallback.dailyUsage : parsedDays
-
-        var windows: [RateWindow] = []
-        if let groups = limits.dictionary("rateLimitsByLimitId") {
-            for (groupID, raw) in groups {
-                guard let group = raw as? [String: Any] else { continue }
-                appendWindows(from: group, fallbackID: groupID, into: &windows)
-            }
-        } else if let single = limits.dictionary("rateLimits") {
-            appendWindows(from: single, fallbackID: single.string("limitId") ?? "codex", into: &windows)
-        }
-        windows.sort {
-            if $0.limitID == "codex" && $1.limitID != "codex" { return true }
-            if $0.limitID != "codex" && $1.limitID == "codex" { return false }
-            return $0.id < $1.id
-        }
-        if limits.isEmpty { windows = fallback.rateWindows }
-        let resetCredits: Int
-        if limits.isEmpty {
-            resetCredits = fallback.availableResetCredits
-        } else if let availableCount = limits.dictionary("rateLimitResetCredits")?.integer("availableCount") {
-            resetCredits = availableCount
-        } else {
-            // Reset-credit metadata can be absent from an otherwise successful
-            // response. Keep the last known value instead of briefly dropping
-            // to zero and notifying again when the field reappears.
-            resetCredits = fallback.availableResetCredits
-        }
-        return UsageSnapshot(
-            capturedAt: Date(),
-            account: account,
-            dailyUsage: days,
-            rateWindows: windows,
-            availableResetCredits: resetCredits
-        )
-    }
-
-    private func appendWindows(from group: [String: Any], fallbackID: String, into output: inout [RateWindow]) {
-        for name in ["primary", "secondary"] {
-            guard let item = group.dictionary(name) else { continue }
-            output.append(RateWindow(
-                limitID: group.string("limitId") ?? fallbackID,
-                limitName: group.string("limitName"),
-                windowName: name,
-                usedPercent: item.double("usedPercent") ?? 0,
-                durationMinutes: item.integer("windowDurationMins"),
-                resetsAt: item.integer("resetsAt").map { Date(timeIntervalSince1970: TimeInterval($0)) }
-            ))
-        }
     }
 
     private func persist(_ value: UsageSnapshot) {

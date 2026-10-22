@@ -84,6 +84,37 @@ struct ModelChecks {
         require(selection.pinnedID == nil, "Missing selection returns to follow mode")
         selection.select(nil)
         require(selection.selected(in: [archive]) == nil && selection.selected(in: []) == nil, "No active task stays empty, never auto-select archive")
-        print("Swift model checks passed: budgets, privacy, context counters, task deduplication, follow/pin selection, history exclusion and stale request rejection")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let validLimits: [String: Any] = ["rateLimits": ["limitId": "codex", "primary": ["usedPercent": 25, "windowDurationMins": 10080, "resetsAt": 1_800_000_600]]]
+        let fresh = UsageSnapshot.refreshed(usage: [:], limits: validLimits, fallback: .empty, now: now)
+        require(fresh.rateWindows.first?.remainingPercent == 75 && fresh.capturedAt == now, "Measured quota refresh")
+        let partial = UsageSnapshot.refreshed(usage: ["summary": ["lifetimeTokens": 123]], limits: [:], fallback: fresh, now: now.addingTimeInterval(200))
+        require(partial.account?.lifetimeTokens == 123 && partial.rateWindows == fresh.rateWindows && partial.capturedAt == now, "Usage-only success cannot freshen old quota")
+        require(!partial.hasFreshQuota(at: now.addingTimeInterval(200)), "Stale quota is unknown for live displays")
+        for used: Any in [true, "0", -1, 101, 1e100, Double.infinity, NSNull()] {
+            let malformed: [String: Any] = ["rateLimits": ["primary": ["usedPercent": used]]]
+            require(QuotaRefreshPolicy.windows(from: malformed).isEmpty, "Malformed usage never becomes 100 percent remaining")
+            let preserved = UsageSnapshot.refreshed(usage: [:], limits: malformed, fallback: fresh, now: now.addingTimeInterval(200))
+            require(preserved.capturedAt == now && preserved.rateWindows == fresh.rateWindows, "Invalid quota preserves original time and windows")
+        }
+        require(QuotaRefreshPolicy.windows(from: ["rateLimits": ["primary": ["windowDurationMins": 10]]]).isEmpty, "Missing percent is unknown")
+        require(QuotaRefreshPolicy.shouldReconnect(failures: 1, errors: [MonitorError.server("401 Unauthorized token_expired")]), "Expired credentials trigger rediscovery")
+        require(!QuotaRefreshPolicy.shouldReconnect(failures: 2, errors: [MonitorError.timeout("limits")]), "Transient failures are bounded")
+        require(QuotaRefreshPolicy.shouldReconnect(failures: 3, errors: [MonitorError.timeout("limits")]), "Repeated timeout reconnects")
+        require(QuotaRefreshPolicy.shouldReconnect(failures: 1, errors: [MonitorError.processEnded]), "Exited process reconnects")
+        let estimate = ContextSnapshot(threadId: "a", source: "test", error: "context_estimated")
+        require(estimate.percent == nil && estimate.unavailableReason.contains("估计"), "Compacted estimate is not an exact snapshot")
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let today = calendar.date(from: DateComponents(year: 2026, month: 10, day: 23, hour: 23, minute: 59))!
+        let renewal = calendar.date(from: DateComponents(year: 2026, month: 10, day: 24))!
+        require(SubscriptionRenewal.remainingDays(until: renewal, now: today, calendar: calendar) == 1, "Count calendar days, not 24-hour periods")
+        require(SubscriptionRenewal.status(for: today, now: today, calendar: calendar) == "今天续费", "Same-day renewal")
+        require(SubscriptionRenewal.status(for: today, now: renewal, calendar: calendar).contains("日期已过"), "Past date never rolls forward silently")
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let dst = calendar.date(from: DateComponents(year: 2026, month: 3, day: 8))!
+        let nextDay = calendar.date(from: DateComponents(year: 2026, month: 3, day: 9))!
+        require(SubscriptionRenewal.remainingDays(until: nextDay, now: dst, calendar: calendar) == 1, "Day count survives daylight saving")
+        print("Swift model checks passed: quota freshness, reconnect policy, unknown values, context compaction, task switching and privacy")
     }
 }

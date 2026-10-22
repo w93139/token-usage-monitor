@@ -197,6 +197,10 @@ final class AppServerClient {
         }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         var candidates = [
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+            "\(home)/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+            "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+            "\(home)/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
             "/Applications/ChatGPT.app/Contents/Resources/codex",
             "\(home)/Applications/ChatGPT.app/Contents/Resources/codex",
             "/Applications/Codex.app/Contents/Resources/codex",

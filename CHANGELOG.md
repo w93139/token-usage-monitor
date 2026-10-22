@@ -2,6 +2,19 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.7.2] - 2026-10-23
+
+### Added
+
+- Bottom-bar monthly subscription renewal date and remaining calendar days, with local manual settings, clear/reset, and explicit overdue status; never inferred from quota resets.
+
+### Fixed
+
+- Discover the relocated desktop Codex CLI and reconnect after expired authentication or repeated quota failures instead of keeping an obsolete process indefinitely.
+- Preserve quota timestamps on partial failures, reject missing/invalid percentages, and display stale quota as historical rather than live remaining capacity.
+- Distinguish local context polling time from the original usage-report time; reject inconsistent synthetic compaction estimates until measured usage arrives.
+- Preserve complete usage/reset events exactly at the bounded log-tail boundary; add recovery, task-switch, compaction and quota-freshness regressions.
+
 ## [1.7.1] - 2026-09-16
 
 ### Fixed
