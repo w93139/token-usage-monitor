@@ -4,188 +4,65 @@
 [![Release](https://img.shields.io/github/v/release/w93139/token-usage-monitor)](https://github.com/w93139/token-usage-monitor/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
 
-本地优先、注重隐私的 Codex 插件与 macOS 菜单栏应用，用于监测任务 Token、API
-用量、额度窗口、刷新时间和额外刷新次数。提示词、回复正文和 API Key 均不会被保存。
+本地优先的 Codex 插件与 macOS 菜单栏应用，用于查看任务 Token、API 用量、额度窗口和重置时间。提示词、回复正文、API Key 和账号邮箱不会被持久化。
 
-## 下载与安装
+## 安装与运行
 
-1. 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest)
-   下载 `Token-Monitor-macOS-arm64-v1.7.1.zip`。
-2. 解压后将 `Token监测.app` 移入“应用程序”文件夹并启动。
-3. 首次启动若被 Gatekeeper 拦截，请在“系统设置 → 隐私与安全性”中确认打开。
+从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest) 下载 macOS arm64 ZIP，解压后将 `Token监测.app` 移入“应用程序”并启动。要求 Apple Silicon、macOS 13+，以及已登录的本地 Codex／ChatGPT 环境。
 
-运行要求：Apple Silicon Mac、macOS 13 或更高版本，以及已登录的本地 Codex/ChatGPT
-环境。当前公开构建采用 ad-hoc 签名；Developer ID 签名和 Apple 公证尚未完成。
+公开构建采用 ad-hoc 签名，尚未完成 Developer ID 签名与 Apple 公证；首次打开如被 Gatekeeper 拦截，在“系统设置 → 隐私与安全性”中确认打开。
 
-## 1.7.1 更新
+从源码构建需要 Swift 5.8+：
 
-- 上下文切换统一到可搜索的任务列表，正在查看的任务不会重复出现在列表中；同名任务用短编号区分。
-- 默认跟随最近更新的未归档任务；查看历史时固定选择，可一键返回最近活动。这里不识别 Codex 前台任务。
-- 上下文独立读取，快速切换时丢弃旧结果，避免显示上一任务的快照。
-
-此前 1.7.0 已加入：
-
-- “任务累计 Token”独立刷新，显示读取时间、失败与过期状态；任务读取与联网额度刷新分开。
-- 可选择任务查看最近一次运行时上报的上下文数量、实际容量和上报时间。超过 60 秒标为历史快照；压缩、回滚、数据缺失或有界尾读未命中时显示不可用，不用累计值替代。
-- 任务、API 行与按钮增加轻量悬停反馈；任务提示显示完整标题和精确计数，支持系统“减少动态效果”。
-- 设置中可添加/编辑/移除中转站渠道配置，填写本地 Token 预算，并选择自定义菜单栏额度来源。移除配置保留用量记录。
-- 分别显示接收端健康、每渠道已收到的记录数与最近记录时间；流式最终 usage 缺失会拒绝记录，重复上报不累加。
-
-任务累计数来自 Codex 本地数据库，可能重复计入历史输入；父任务是否包含全部子代理用量尚未核实。上下文来自本机 Codex 日志中最近可用的 usage 元数据，不保证反映其后的全部上下文变化。应用只在内存中有界读取日志并提取计数，不持久化对话正文。
-
-任务仅使用明确的名称；没有名称时显示“未命名任务＋短编号”，不再将首条提示词当作标题。旧版派生任务缓存会在升级后按新规则重建，Codex 原始任务和用量数据库保持不变。插件可通过 `get_task_context_usage` 按任务 ID 读取同口径快照。
-
-## 核心能力
-
-- 菜单栏实时余量圆环，可选择 Codex、OpenAI API 或 DeepSeek API
-- 每个任务的 Token 总量、对话名称、模型和更新时间
-- OpenAI/DeepSeek 兼容 API 的输入、输出、缓存和推理 Token 记录
-- 可配置 API Token 总额度，并显示已用量、余量和剩余百分比
-- 14 天最近用量图、悬停详情、额度刷新倒计时和本地通知
-- 启动自动展开、顶部余量浮标、登录启动和 GitHub Release 自动检查
-- 本地 SQLite 存储，监听端点仅绑定 `127.0.0.1`
-
-The repository also includes a native macOS 13+ menu-bar app in
-`macos/TokenUsageMonitor`. It provides a glanceable remaining-quota percentage, reset
-countdown, daily chart, local alerts, and optional launch at login while using
-the same local-only privacy model.
-
-Version 1.6.3 preserves the last known extra-reset count when reset-credit metadata
-is temporarily unavailable, avoiding duplicate grant notifications. Collectors
-sharing the local database claim each detected increase only once.
-
-Version 1.6 adopts a standard resizable macOS window, a 1024×1024 app icon with
-true transparent margins, and a dedicated always-front quota badge. The pin
-control now keeps only the selected remaining-quota number visible near the top
-of the screen; the main window retains normal window layering. macOS controls
-the ordering of menu-bar status items, so the badge provides a stable public-API
-alternative when the status item would otherwise be hidden. Version 1.5 added
-the Chinese product name Token监测, update checks, and launch-time opening. The recent-usage chart
-also adds readable date ticks, a 14-day total, and a hover guide. Version 1.4 added
-mouse-hover inspection to the recent-usage chart, showing the exact date and
-Token count while highlighting the selected bar. Version 1.3
-added a live circular remaining-quota indicator to the menu bar and
-quota cards. The white arc is the remaining allowance, the consumed portion is
-left blank, and each card also shows the exact consumed percentage. The app
-prefers the Codex runtime bundled with ChatGPT and keeps the last successful
-quota snapshot during transient network failures.
-
-## macOS menu-bar app
-
-Build the finished app with:
-
-```bash
-cd macos/TokenUsageMonitor
-./scripts/build_app.sh
-open 'dist/Token监测.app'
+```sh
+macos/TokenUsageMonitor/scripts/build_app.sh
+open 'macos/TokenUsageMonitor/dist/Token监测.app'
 ```
 
-The menu bar shows the current remaining-quota percentage. Click it to view all quota
-windows, reset countdowns, a 14-day activity chart, alert settings, manual
-refresh, and the launch-at-login option. Use the pin button in the panel header
-to keep a compact quota badge above other windows while leaving the main window
-at its normal level. Automatic update checks are enabled by
-default and can be disabled in Settings; update links open the public GitHub
-release page. The local build is ad-hoc signed;
-Developer ID signing and Apple notarization are required before distributing a
-download that opens without Gatekeeper review on other Macs.
+插件能力定义见 [SKILL.md](skills/token-usage-monitor/SKILL.md)。
 
-## What it records
+## 主要功能
 
-- Account token summaries and daily buckets returned by Codex services
-- Current rate-limit percentages, window lengths, and scheduled reset times
-- Earned reset-credit metadata
-- Thread token-usage events when the connected App Server emits them
-- Per-task Codex totals with the user-facing conversation title
-- API response usage counters grouped by provider, model, and optional task name
+- 菜单栏余量圆环，可选择 Codex、OpenAI API、DeepSeek API 或自定义渠道。
+- 任务列表、累计 Token、模型与更新时间；可固定查看历史任务或跟随最近活动。
+- 最近可用的任务上下文快照，独立显示读取时间、过期与不可用状态。
+- API 输入、输出、缓存和推理 Token 记录，以及本地设置的 Token 预算。
+- 14 天用量图、额度重置倒计时、本地提醒、可置顶余量浮标和登录启动。
+- GitHub Release 更新检查，可在设置中关闭。
 
-It does **not** send or persist prompt bodies, response bodies, API keys, or account email addresses. Context inspection reads a bounded tail (at most 4 MiB) of the selected local Codex log in memory and extracts usage/reset metadata only.
+## API 接入
 
-## External API usage
+运行 macOS 应用后，可向仅绑定本机的 `POST http://127.0.0.1:47821/v1/usage` 上报响应中的 usage 元数据，也可调用插件的 `record_api_usage`。支持 OpenAI 与兼容接口的计数字段；最终 usage 缺失时不记录，重复请求不累加。
 
-While the macOS app is running, a loopback-only endpoint accepts usage metadata:
+监测器不代理模型请求，不截取 HTTPS 流量，也不需要服务商密钥。调用方只发送用量计数与必要的标识，不能发送提示词、回复正文或凭据。载荷、流式示例与渠道设置见 [API 接入指南](docs/API_INTEGRATION.md)。
 
-```text
-POST http://127.0.0.1:47821/v1/usage
-Content-Type: application/json
-```
+## 隐私与计数边界
 
-Example payload:
+- 任务累计量来自本地 Codex 数据库，可能重复计入历史输入；父任务是否含全部子代理用量尚未核实。
+- 上下文是日志最近一次可用的 usage 元数据，不能保证反映随后发生的全部变化。应用只在内存中有界读取日志尾部（最多 4 MiB），不保存对话正文。
+- 任务名只取明确标题；无标题显示“未命名任务＋短编号”。不会用首条提示词充当标题。
+- 实时任务计数依赖所连接 App Server 暴露相应事件；缺失数据表示不可用，不能当作零。
+- 账号统计依赖 Codex 账号认证；仅 API Key 或 Bedrock 认证不能取得相同账号摘要。
+- 额外重置只能在服务实际提供后检测；工具不预测、购买或消耗重置次数，也不把订阅额度换算成虚构的固定 Token 总额。
+- API 预算由用户本地填写，并非服务商实际余额。
 
-```json
-{
-  "provider": "deepseek",
-  "model": "deepseek-chat",
-  "task_name": "Summarize reports",
-  "request_id": "request-123",
-  "usage": {
-    "prompt_tokens": 120,
-    "completion_tokens": 30,
-    "total_tokens": 150
-  }
-}
-```
+## 数据与通知
 
-The endpoint accepts both OpenAI `input_tokens`/`output_tokens` fields and
-OpenAI-compatible `prompt_tokens`/`completion_tokens` fields. It never proxies
-requests and must never receive an API key, prompt, or response body. OpenAI's
-organization-wide Usage API requires an admin key; DeepSeek exposes per-response
-usage and an account balance endpoint, so response-level ingestion is the
-portable default.
+插件启用时运行后台采集器；默认每 60 秒轮询。可用 `TOKEN_USAGE_MONITOR_POLL_SECONDS` 设置不低于 15 秒的间隔。
 
-The macOS settings screen accepts an optional Token budget for OpenAI and
-DeepSeek. The API card then shows lifetime recorded usage, remaining Tokens, and
-remaining percentage. The menu-bar ring can independently display Codex,
-OpenAI, or DeepSeek remaining quota. Budgets stay in local macOS preferences;
-the monitor never requests provider credentials.
+本地 SQLite 位置：
 
-完整接入示例、字段说明和安全边界见
-[API Integration Guide](docs/API_INTEGRATION.md)。
+- macOS：`~/Library/Application Support/Token Usage Monitor/usage.sqlite3`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/token-usage-monitor/usage.sqlite3`
 
-## Runtime behavior
+默认在用量达到 80%、95%、100% 时提醒，重置前 30 分钟提醒；检测到新额外重置时通知一次。用 `configure_usage_alerts` 修改设置，或设 `TOKEN_USAGE_MONITOR_DISABLE_NOTIFICATIONS=1` 禁用进程通知。
 
-The MCP server starts a background collector while the plugin is active. The
-macOS app prefers the Codex runtime bundled with ChatGPT, uses the shared App
-Server only when its control socket exists, and otherwise opens a standalone
-read-only connection. Data is stored in:
+## 开发与许可
 
-- macOS: `~/Library/Application Support/Token Usage Monitor/usage.sqlite3`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/token-usage-monitor/usage.sqlite3`
+依赖外部 Python 包之前的基础测试入口（Python 3.9+）：
 
-The default polling interval is 60 seconds. Set `TOKEN_USAGE_MONITOR_POLL_SECONDS` to a value of at least 15 seconds to override it.
-
-## Notifications
-
-Local notifications are enabled by default at 80%, 95%, and 100% usage. A scheduled reset warning is sent 30 minutes before `resetsAt`. When a new earned reset is detected, the plugin announces it but never consumes it.
-
-Use the `configure_usage_alerts` tool to change these settings. Set `TOKEN_USAGE_MONITOR_DISABLE_NOTIFICATIONS=1` to suppress notifications for the process.
-
-## Limitations
-
-- ChatGPT token activity summaries require Codex-backed authentication. API-key-only and Bedrock authentication do not expose that account summary endpoint.
-- An unannounced extra reset can only be detected when the service grants it; the plugin cannot predict a future grant that the service has not exposed.
-- Exact live thread counters depend on `thread/tokenUsage/updated` events being visible to the connected App Server. Account and quota polling still works when those events are unavailable.
-- External API usage is recorded when the calling application posts the response `usage` object or invokes the `record_api_usage` MCP tool; the monitor does not intercept HTTPS traffic.
-- The plugin does not calculate subscription allowance as a fictional fixed token budget.
-
-## Local tests
-
-```bash
+```sh
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-macOS 应用构建：
-
-```bash
-macos/TokenUsageMonitor/scripts/build_app.sh
-```
-
-## Contributing and security
-
-- 贡献代码前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
-- 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要公开附带敏感数据的 Issue。
-- 版本变化见 [CHANGELOG.md](CHANGELOG.md)。
-
-## License
-
-Released under the [MIT License](LICENSE).
+贡献与所需检查见 [CONTRIBUTING.md](CONTRIBUTING.md)，私密漏洞报告见 [SECURITY.md](SECURITY.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)。采用 [MIT License](LICENSE)。
