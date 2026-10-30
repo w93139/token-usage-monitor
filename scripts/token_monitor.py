@@ -271,7 +271,16 @@ class UsageStore:
         captured = _now()
         rows = self.flatten_rate_limits(result)
         credit_info = result.get("rateLimitResetCredits") or {}
-        credits = credit_info.get("credits") or []
+        reported = credit_info.get("credits")
+        credits = [credit for credit in reported if isinstance(credit, dict)] if isinstance(reported, list) else []
+        available_count = credit_info.get("availableCount")
+        # Missing/partial detail responses are not an authoritative empty list.
+        complete = (type(available_count) is int and available_count == 0 and reported in (None, [])) or (
+            isinstance(reported, list) and len(credits) == len(reported)
+            and all(isinstance(credit.get("id"), str) and credit["id"] for credit in credits)
+            and (available_count is None or type(available_count) is int and available_count ==
+                 sum(credit.get("status") == "available" for credit in credits))
+        )
         with self._lock, self._connect() as conn:
             for row in rows:
                 conn.execute(
@@ -287,6 +296,16 @@ class UsageStore:
                         row["resetsAt"],
                         _json(row),
                     ),
+                )
+            if complete:
+                # Preserve historical rows without pretending disappearance means redemption.
+                ids = [credit["id"] for credit in credits]
+                placeholders = ",".join("?" for _ in ids)
+                condition = f" AND credit_id NOT IN ({placeholders})" if ids else ""
+                conn.execute(
+                    "UPDATE reset_credits SET status = CASE WHEN expires_at IS NOT NULL AND expires_at <= ? "
+                    "THEN 'expired' ELSE 'unavailable' END WHERE (status IS NULL OR status = 'available')" + condition,
+                    (captured, *ids),
                 )
             for credit in credits:
                 credit_id = credit.get("id")
@@ -305,6 +324,8 @@ class UsageStore:
                         captured,
                     ),
                 )
+            conn.execute("UPDATE reset_credits SET status='expired' WHERE (status IS NULL OR status='available') "
+                         "AND expires_at IS NOT NULL AND expires_at <= ?", (captured,))
         return rows, credits
 
     def save_thread_usage(self, params: dict[str, Any]) -> None:
@@ -487,7 +508,8 @@ class UsageStore:
                 ).fetchall()
             credits = conn.execute(
                 "SELECT credit_id, status, granted_at, expires_at, title, description "
-                "FROM reset_credits WHERE status IS NULL OR status = 'available' ORDER BY granted_at DESC"
+                "FROM reset_credits WHERE status = 'available' AND (expires_at IS NULL OR expires_at > ?) "
+                "ORDER BY granted_at DESC", (_now(),)
             ).fetchall()
             thread = conn.execute(
                 "SELECT captured_at, thread_id, input_tokens, cached_input_tokens, output_tokens, reasoning_tokens, total_tokens "
@@ -843,7 +865,7 @@ class UsageMonitor:
         available_count = int(credit_info["availableCount"])
         previous_count = int(self.store.swap_state("reset_credits.available_count", str(available_count), "0") or 0)
         if available_count > previous_count:
-            body = f"检测到 {available_count - previous_count} 个新的额度重置机会；不会自动兑换"
+            body = f"检测到 {available_count - previous_count} 个新的额度重置机会；是否到期自动使用取决于已启用的独立后台策略"
             self.notifier.send("Codex 额外刷新可用", body)
             self.store.add_event("extra_reset_granted", body, credits)
 
@@ -861,6 +883,8 @@ class UsageMonitor:
         return self.status()
 
     def status(self) -> dict[str, Any]:
+        from reset_credit_worker import read_status
+
         stored_refresh = self.store.get_state("collector.last_refresh")
         stored_error = self.store.get_state("collector.last_error")
         return {
@@ -872,6 +896,7 @@ class UsageMonitor:
             "lastError": self.last_error or stored_error or None,
             "databasePath": str(self.store.db_path),
             "storesConversationText": False,
+            "resetCreditAutoUse": read_status(self.store),
             "notificationsEnabled": self.notifier.enabled(),
             "thresholds": self._thresholds(),
             "resetWarningMinutes": int(self.store.get_state("notifications.reset_warning_minutes", "30") or 30),

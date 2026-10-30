@@ -88,6 +88,24 @@ struct ModelChecks {
         let validLimits: [String: Any] = ["rateLimits": ["limitId": "codex", "primary": ["usedPercent": 25, "windowDurationMins": 10080, "resetsAt": 1_800_000_600]]]
         let fresh = UsageSnapshot.refreshed(usage: [:], limits: validLimits, fallback: .empty, now: now)
         require(fresh.rateWindows.first?.remainingPercent == 75 && fresh.capturedAt == now, "Measured quota refresh")
+        var creditLimits = validLimits
+        creditLimits["rateLimitResetCredits"] = ["availableCount": 2, "credits": [
+            ["id": "expired", "status": "available", "expiresAt": 1_800_000_000],
+            ["id": "live", "status": "available", "expiresAt": 1_800_000_060]]]
+        let cards = UsageSnapshot.refreshed(usage: [:], limits: creditLimits, fallback: .empty, now: now)
+        require(cards.availableResetCredits == 1 && cards.availableResetCreditCount(at: now) == 1, "Expired cards never count")
+        require(cards.availableResetCreditCount(at: now.addingTimeInterval(60)) == 0, "Cached card expires without network")
+        let missingCards = UsageSnapshot.refreshed(usage: [:], limits: validLimits, fallback: cards, now: now.addingTimeInterval(60))
+        require(missingCards.availableResetCredits == 0, "Missing detail cannot revive expired card")
+        creditLimits["rateLimitResetCredits"] = ["availableCount": 0, "credits": []]
+        let noCards = UsageSnapshot.refreshed(usage: [:], limits: creditLimits, fallback: cards, now: now)
+        require(noCards.availableResetCreditCount(at: now) == 0, "Authoritative empty list clears cards")
+        let encodedCards = try JSONEncoder().encode(cards)
+        let decodedCards = try JSONDecoder().decode(UsageSnapshot.self, from: encodedCards)
+        require(decodedCards.availableResetCreditCount(at: now.addingTimeInterval(60)) == 0, "Expiry survives cache reload")
+        var legacyCards = UsageSnapshot.empty
+        legacyCards.availableResetCredits = 6
+        require(legacyCards.availableResetCreditCount(at: now) == 0, "Legacy count alone is not proof of live cards")
         let partial = UsageSnapshot.refreshed(usage: ["summary": ["lifetimeTokens": 123]], limits: [:], fallback: fresh, now: now.addingTimeInterval(200))
         require(partial.account?.lifetimeTokens == 123 && partial.rateWindows == fresh.rateWindows && partial.capturedAt == now, "Usage-only success cannot freshen old quota")
         require(!partial.hasFreshQuota(at: now.addingTimeInterval(200)), "Stale quota is unknown for live displays")

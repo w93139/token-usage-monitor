@@ -772,9 +772,9 @@ final class MonitorStore: ObservableObject {
                 }
             }
         }
-        if current.availableResetCredits > previous.availableResetCredits {
-            let count = current.availableResetCredits - previous.availableResetCredits
-            sendNotification(title: "Codex 额外刷新可用", body: "检测到 \(count) 个新的重置机会，不会自动兑换")
+        if current.availableResetCreditCount() > previous.availableResetCreditCount() {
+            let count = current.availableResetCreditCount() - previous.availableResetCreditCount()
+            sendNotification(title: "Codex 额外刷新可用", body: "检测到 \(count) 个新的重置机会；到期自动使用取决于独立后台策略")
         }
     }
 

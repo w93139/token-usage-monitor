@@ -2,6 +2,17 @@
 
 All notable changes to Token监测 are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Hide expired reset cards and reconcile disappeared cards without labeling them as redeemed. Preserve still-valid cached details during incomplete service responses; native caches retain expiration times.
+
+### Added
+
+- A separately enabled, account-bound reset-card expiry worker, disabled by default. It processes current and future earned reset cards only within the configured expiry window (30 minutes by default), checks fresh service data, uses durable idempotency keys for uncertain retries, prevents duplicate workers, and records confirmed outcomes.
+- Local worker policy, plan and attempt metadata in monitoring status. Ordinary quota polling remains read-only; quota exhaustion and usage thresholds never authorize a reset. Sleeping/offline machines and unavailable card details can prevent timely execution.
+
 ## [1.7.3] - 2026-10-23
 
 ### Added

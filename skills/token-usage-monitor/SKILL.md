@@ -37,6 +37,9 @@ Use the `token-usage-monitor` MCP tools as the source of truth for local usage d
 
 - The plugin stores counts, identifiers, model names, and user-facing task titles locally, never prompt or response bodies.
 - Never store or transmit an API key through `record_api_usage`.
-- Never consume an earned reset automatically.
+- Never consume an earned reset automatically unless the user explicitly enables a narrowly scoped expiry policy for their current account. Ordinary monitoring, thresholds and exhausted quota are not redemption authorization.
+- For an explicitly requested expiry policy, use `scripts/reset_credit_worker.py` with an account-bound persisted policy; default disabled, expiry lead 30 minutes. Exact fresh card ID, unexpired time, policy/account match, persisted idempotency keys and confirmed service outcomes are required. Never use paid credits or purchase anything.
+- `--status` reads saved worker status, `--dry-run` reads current cards without redemption, and `--disable` cancels future auto-use. An enabled policy requires the separately installed local worker; check its recent heartbeat and launch service rather than claiming configuration alone guarantees execution.
+- Local execution needs an awake logged-in machine, network and valid Codex authentication. Do not claim a service-side schedule or historical successful use without a confirmed redemption result.
 - Never call an email, messaging, billing, or purchasing action from usage data.
 - Do not claim that a notification was delivered unless the tool reports success.

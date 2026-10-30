@@ -10,11 +10,16 @@ binary_path="$build_dir/TokenUsageMonitor"
 mkdir -p "$build_dir" "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 rm -f "$app_path/Contents/Resources/AppIcon.icns"
 
-if (cd "$project_dir" && swift build -c release >/dev/null 2>&1); then
-  swift_product="$(cd "$project_dir" && swift build -c release --show-bin-path)/TokenUsageMonitor"
+sdk_args=()
+if [[ -n "${TOKEN_MONITOR_SDK_PATH:-}" ]]; then
+  sdk_args=(--sdk "$TOKEN_MONITOR_SDK_PATH")
+fi
+
+if (cd "$project_dir" && swift build -c release "${sdk_args[@]}" >/dev/null 2>&1); then
+  swift_product="$(cd "$project_dir" && swift build -c release "${sdk_args[@]}" --show-bin-path)/TokenUsageMonitor"
   install -m 755 "$swift_product" "$binary_path"
 else
-  sdk_path="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)"
+  sdk_path="${TOKEN_MONITOR_SDK_PATH:-$(xcrun --sdk macosx --show-sdk-path 2>/dev/null || true)}"
   if [[ -z "$sdk_path" ]]; then
     for candidate in /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk; do
       [[ -d "$candidate" ]] && sdk_path="$candidate"
@@ -28,6 +33,7 @@ fi
 install -m 755 "$binary_path" "$app_path/Contents/MacOS/TokenUsageMonitor"
 install -m 644 "$project_dir/AppInfo.plist" "$app_path/Contents/Info.plist"
 install -m 644 "$project_dir/../../scripts/token_monitor.py" "$app_path/Contents/Resources/token_monitor.py"
+install -m 644 "$project_dir/../../scripts/reset_credit_worker.py" "$app_path/Contents/Resources/reset_credit_worker.py"
 install -m 644 "$project_dir/../../scripts/api_usage_server.py" "$app_path/Contents/Resources/api_usage_server.py"
 install -m 644 "$project_dir/../../scripts/context_snapshot.py" "$app_path/Contents/Resources/context_snapshot.py"
 

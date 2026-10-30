@@ -135,8 +135,8 @@ struct MonitorPanel: View {
             apiUsageCard
             if !monitor.snapshot.dailyUsage.isEmpty { historyChart }
 
-            if monitor.snapshot.availableResetCredits > 0 {
-                Label("可用额外刷新：\(monitor.snapshot.availableResetCredits)", systemImage: "sparkles")
+            if monitor.snapshot.availableResetCreditCount() > 0 {
+                Label("可用额外刷新：\(monitor.snapshot.availableResetCreditCount())", systemImage: "sparkles")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.mint)
                     .padding(10)

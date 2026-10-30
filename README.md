@@ -36,6 +36,23 @@ open 'macos/TokenUsageMonitor/dist/Token监测.app'
 
 1.7.2 修复桌面 Codex 升级后路径变化与认证过期导致的停更，支持失败后重连。历史额度保留原更新时间，不会伪装成实时余量。
 
+## 重置卡到期保护（本地）
+
+可用卡片会排除已过期和服务端已移除的记录；详情查询临时缺失时保留仍在有效期内的缓存，不把历史卡片复活。
+
+独立后台脚本 `scripts/reset_credit_worker.py` 默认关闭。只有用户明确授权后，才为指定账号开启；配置示例：
+
+```sh
+python3 scripts/reset_credit_worker.py --configure --account-id '<accountId>' --lead-minutes 30
+python3 scripts/reset_credit_worker.py --dry-run
+python3 scripts/reset_credit_worker.py --status
+python3 scripts/reset_credit_worker.py --disable
+```
+
+无参数运行后台轮询服务；macOS 可由用户 LaunchAgent 在登录后常驻。所有当前及未来新获得的卡都在到期前 30 分钟内才具备自动使用条件，每次以服务端当前卡片 ID、账号及有效期为准。额度用尽、用量升高、普通刷新均不会触发提前兑换，也不会购买或使用付费额度。全额度已为零时无需清零，后台继续等候；成功以服务端兑换结果为准，单纯卡片消失不记作成功。
+
+每次兑换保留幂等键，网络结果不明时使用同一键重试，并记录结果供查询。状态及通知只保存用量与操作元数据。机器关机、休眠、退出登录、断网或账号认证失效时无法保证到期前执行；唤醒后只处理尚未过期的卡。`--disable` 立即取消未来自动兑换，重启不会重新开启。
+
 ## API 接入
 
 运行 macOS 应用后，可向仅绑定本机的 `POST http://127.0.0.1:47821/v1/usage` 上报响应中的 usage 元数据，也可调用插件的 `record_api_usage`。支持 OpenAI 与兼容接口的计数字段；最终 usage 缺失时不记录，重复请求不累加。
@@ -50,7 +67,7 @@ open 'macos/TokenUsageMonitor/dist/Token监测.app'
 - 任务名只取明确标题；无标题显示“未命名任务＋短编号”。不会用首条提示词充当标题。
 - 实时任务计数依赖所连接 App Server 暴露相应事件；缺失数据表示不可用，不能当作零。
 - 账号统计依赖 Codex 账号认证；仅 API Key 或 Bedrock 认证不能取得相同账号摘要。
-- 额外重置只能在服务实际提供后检测；工具不预测、购买或消耗重置次数，也不把订阅额度换算成虚构的固定 Token 总额。
+- 额外重置只能在服务实际提供后检测；普通采集器不预测、购买或消耗重置次数；独立后台服务只有在用户显式开启的临期策略下才会兑换有效重置卡，也不把订阅额度换算成虚构的固定 Token 总额。
 - API 预算由用户本地填写，并非服务商实际余额。
 - 续费日期是本地预计值，不核验订阅或扣款状态；取消、暂停、换账号或改套餐后请修改或清除。
 

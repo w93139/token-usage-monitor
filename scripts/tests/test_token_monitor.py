@@ -49,7 +49,7 @@ class UsageStoreTests(unittest.TestCase):
             },
             "rateLimitResetCredits": {
                 "availableCount": 1,
-                "credits": [{"id": "reset-1", "status": "available", "grantedAt": 1, "expiresAt": 2}],
+                "credits": [{"id": "reset-1", "status": "available", "grantedAt": 1, "expiresAt": 2000000000}],
             },
         }
         rows, credits = self.store.save_rate_limits(payload)
@@ -58,6 +58,38 @@ class UsageStoreTests(unittest.TestCase):
         summary = self.store.summary()
         self.assertEqual(len(summary["rateLimits"]), 2)
         self.assertEqual(summary["availableResetCredits"][0]["credit_id"], "reset-1")
+
+    def test_expired_credit_is_hidden_at_expiry_even_without_refresh(self):
+        with patch("token_monitor._now", return_value=100):
+            self.store.save_rate_limits({"rateLimitResetCredits": {"availableCount": 2, "credits": [
+                {"id": "expired", "status": "available", "expiresAt": 100},
+                {"id": "live", "status": "available", "expiresAt": 200}]}})
+            self.assertEqual([c["credit_id"] for c in self.store.summary()["availableResetCredits"]], ["live"])
+        with patch("token_monitor._now", return_value=200):
+            self.assertEqual(self.store.summary()["availableResetCredits"], [])
+
+    def test_complete_list_retires_disappeared_credit_without_claiming_used(self):
+        with patch("token_monitor._now", return_value=100):
+            self.store.save_rate_limits({"rateLimitResetCredits": {"availableCount": 2, "credits": [
+                {"id": "gone", "status": "available", "expiresAt": 300},
+                {"id": "live", "status": "available", "expiresAt": 300}]}})
+            self.store.save_rate_limits({"rateLimitResetCredits": {"availableCount": 1, "credits": [
+                {"id": "live", "status": "available", "expiresAt": 300}]}})
+            self.assertEqual([c["credit_id"] for c in self.store.summary()["availableResetCredits"]], ["live"])
+            with self.store._connect() as conn:
+                self.assertEqual(conn.execute("SELECT status FROM reset_credits WHERE credit_id='gone'").fetchone()[0], "unavailable")
+
+    def test_missing_and_partial_metadata_preserve_then_explicit_zero_retires(self):
+        with patch("token_monitor._now", return_value=100):
+            self.store.save_rate_limits({"rateLimitResetCredits": {"availableCount": 1, "credits": [
+                {"id": "live", "status": "available", "expiresAt": 300}]}})
+            for payload in ({}, {"rateLimitResetCredits": {}},
+                            {"rateLimitResetCredits": {"availableCount": 1}},
+                            {"rateLimitResetCredits": {"availableCount": 1, "credits": []}}):
+                self.store.save_rate_limits(payload)
+                self.assertEqual(len(self.store.summary()["availableResetCredits"]), 1)
+            self.store.save_rate_limits({"rateLimitResetCredits": {"availableCount": 0, "credits": []}})
+            self.assertEqual(self.store.summary()["availableResetCredits"], [])
 
     def test_thread_usage_never_stores_message_text(self):
         payload = {"threadId": "thr_test", "usage": {"inputTokens": 10, "outputTokens": 5, "totalTokens": 15}}

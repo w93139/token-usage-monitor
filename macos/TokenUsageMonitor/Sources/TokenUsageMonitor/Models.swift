@@ -285,6 +285,12 @@ struct UsageSnapshot: Codable, Equatable {
     var dailyUsage: [DailyUsage]
     var rateWindows: [RateWindow]
     var availableResetCredits: Int
+    // Optional for old cache compatibility. Counts without expiry evidence are not live cards.
+    var resetCreditExpirations: [Date]? = nil
+
+    func availableResetCreditCount(at now: Date = Date()) -> Int {
+        resetCreditExpirations?.filter { $0 > now }.count ?? 0
+    }
 
     func hasFreshQuota(at date: Date = Date()) -> Bool {
         !rateWindows.isEmpty && date.timeIntervalSince(capturedAt) >= 0 && date.timeIntervalSince(capturedAt) <= 90
@@ -313,23 +319,27 @@ struct UsageSnapshot: Codable, Equatable {
         let parsedWindows = QuotaRefreshPolicy.windows(from: limits)
         let validQuota = !parsedWindows.isEmpty
         let windows = validQuota ? parsedWindows : fallback.rateWindows
-        let resetCredits: Int
-        if !validQuota {
-            resetCredits = fallback.availableResetCredits
-        } else if let availableCount = limits.dictionary("rateLimitResetCredits")?.integer("availableCount") {
-            resetCredits = availableCount
-        } else {
-            // Reset-credit metadata can be absent from an otherwise successful
-            // response. Keep the last known value instead of briefly dropping
-            // to zero and notifying again when the field reappears.
-            resetCredits = fallback.availableResetCredits
+        var expirations = fallback.resetCreditExpirations
+        if validQuota, let metadata = limits.dictionary("rateLimitResetCredits") {
+            if metadata.integer("availableCount") == 0 {
+                expirations = []
+            } else if let reported = metadata["credits"] as? [[String: Any]],
+                      metadata.integer("availableCount") == nil ||
+                        metadata.integer("availableCount") == reported.filter({ $0.string("status") == "available" }).count {
+                expirations = reported.compactMap { credit in
+                    guard credit.string("status") == "available", let expiry = credit.integer("expiresAt") else { return nil }
+                    return Date(timeIntervalSince1970: TimeInterval(expiry))
+                }
+            }
         }
+        let resetCredits = expirations?.filter { $0 > now }.count ?? 0
         return UsageSnapshot(
             capturedAt: validQuota ? now : fallback.capturedAt,
             account: account,
             dailyUsage: days,
             rateWindows: windows,
-            availableResetCredits: resetCredits
+            availableResetCredits: resetCredits,
+            resetCreditExpirations: expirations
         )
     }
 
