@@ -4,12 +4,15 @@ import ServiceManagement
 import SwiftUI
 
 struct MonitorPanel: View {
+    let panel: MonitorStore.DetailPanel
     @ObservedObject var monitor: MonitorStore
     @ObservedObject var presentationController: AppPresentationController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showsSettings = false
     @State private var showsSupplementalLimits = false
-    @State private var hoveredDailyUsage: DailyUsage?
+    @State private var showsAPIDetails = false
+    @State private var showsUsageDetails = false
+    @State private var hoveredDate: String?
     @State private var taskSearch = ""
     @State private var showsTaskPicker = false
     @State private var pickerHistory: [TaskUsageRecord] = []
@@ -55,9 +58,9 @@ struct MonitorPanel: View {
                 Text("Token监测").font(.headline)
                 HStack(spacing: 5) {
                     Circle()
-                        .fill(monitor.connectionState.isConnected ? Color.green : Color.orange)
+                        .fill(monitor.quotaIsCurrent ? Color.green : Color.orange)
                         .frame(width: 7, height: 7)
-                    Text(monitor.connectionState.label)
+                    Text(monitor.connectionState.isConnected && !monitor.quotaIsCurrent ? "账号额度待更新" : monitor.connectionState.label)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -83,15 +86,6 @@ struct MonitorPanel: View {
 
     private var dashboard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if let error = monitor.lastError {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
-            }
-
             if let update = monitor.availableUpdate {
                 Button { monitor.openAvailableUpdate() } label: {
                     HStack(spacing: 8) {
@@ -109,17 +103,15 @@ struct MonitorPanel: View {
                 .foregroundStyle(.blue)
             }
 
-            if monitor.snapshot.rateWindows.isEmpty {
-                VStack(spacing: 10) {
-                    ProgressView()
-                    Text("正在读取 Codex 用量…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 45)
-            } else {
-                if let primary = monitor.primaryWindow { rateCard(primary) }
+            if let primary = monitor.primaryWindow {
+                rateCard(primary)
+            } else if monitor.connectionState == .starting {
+                HStack { ProgressView().controlSize(.small); Text("首次读取账号额度…") }
+                    .font(.subheadline).padding(12)
+            }
+            if let error = monitor.lastError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
             }
 
             ContextUsageCard(monitor: monitor, switchTask: openTaskPicker)
@@ -144,9 +136,15 @@ struct MonitorPanel: View {
                 }
             }
 
-            if let account = monitor.snapshot.account { summaryCard(account) }
             apiUsageCard
-            if !monitor.snapshot.dailyUsage.isEmpty { historyChart }
+            DisclosureGroup("用量详情", isExpanded: $showsUsageDetails) {
+                if showsUsageDetails {
+                    if let account = monitor.snapshot.account { summaryCard(account) }
+                    historyChart
+                }
+            }
+            .onChange(of: showsUsageDetails) { _ in hoveredDate = nil }
+            .padding(12).glassCard()
 
             if monitor.snapshot.availableResetCreditCount() > 0 {
                 Label("可用额外刷新：\(monitor.snapshot.availableResetCreditCount())", systemImage: "sparkles")
@@ -227,41 +225,37 @@ struct MonitorPanel: View {
     }
 
     private var historyChart: some View {
-        let recentUsage = Array(monitor.snapshot.dailyUsage.suffix(14))
-        let totalTokens = recentUsage.reduce(0) { $0 + $1.tokens }
-        let maximumTokens = recentUsage.map(\.tokens).max() ?? 1
-        let axisDates = chartAxisDates(from: recentUsage)
+        let days = TrendDay.fortnight(monitor.snapshot.dailyUsage)
+        let reported = days.compactMap(\.tokens)
+        let total = reported.reduce(Decimal.zero) { $0 + Decimal($1) }
+        let maximum = Double(reported.max() ?? 1)
+        let axisDates = [0, 4, 9, 13].compactMap { days.indices.contains($0) ? days[$0].date : nil }
+        let hovered = days.first { $0.date == hoveredDate }
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("最近用量").font(.subheadline.weight(.semibold))
+                Text("近 14 个自然日").font(.subheadline.weight(.semibold))
                 Spacer()
-                if let hoveredDailyUsage {
-                    Text("\(hoveredDailyUsage.date) · \(hoveredDailyUsage.tokens.formatted()) tokens")
-                        .font(.caption2.monospacedDigit().weight(.medium))
-                        .foregroundStyle(.primary)
-                        .transition(.opacity)
-                } else {
-                    Text("近 14 天 · 合计 \(compact(totalTokens)) tokens")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                if let hovered {
+                    Text("\(chartDateLabel(hovered.date)) · \(hovered.tokens.map { "\($0.formatted()) tokens" } ?? "未上报")")
+                        .font(.caption2.monospacedDigit())
+                } else if !reported.isEmpty {
+                    Text("已上报合计 \(total.formatted())").font(.caption.monospacedDigit())
                 }
             }
-            Chart(recentUsage) { item in
-                BarMark(x: .value("日期", item.date), y: .value("Token", item.tokens))
-                    .foregroundStyle(
-                        hoveredDailyUsage == nil || hoveredDailyUsage?.id == item.id
-                            ? Color.accentColor
-                            : Color.accentColor.opacity(0.28)
-                    )
-                    .cornerRadius(2)
-                    .accessibilityLabel(chartDateLabel(item.date))
-                    .accessibilityValue("\(item.tokens.formatted()) tokens")
-                if hoveredDailyUsage?.id == item.id {
-                    RuleMark(x: .value("选中日期", item.date))
-                        .foregroundStyle(Color.secondary.opacity(0.55))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            Text("已上报 \(reported.count)/14 天 · 空缺为未上报").font(.caption2).foregroundStyle(.secondary)
+            Chart(days) { day in
+                if let tokens = day.tokens {
+                    BarMark(x: .value("日期", day.date), y: .value("Token", Double(tokens)))
+                        .foregroundStyle(hovered == nil || hovered?.id == day.id ? Color.accentColor : Color.accentColor.opacity(0.4))
+                        .cornerRadius(2)
+                        .accessibilityLabel(chartDateLabel(day.date))
+                        .accessibilityValue("\(tokens.formatted()) tokens")
+                }
+                if hovered?.id == day.id {
+                    RuleMark(x: .value("日期", day.date)).foregroundStyle(Color.secondary.opacity(0.4))
                 }
             }
+            .chartXScale(domain: days.map(\.date))
             .chartXAxis {
                 AxisMarks(values: axisDates) { value in
                     AxisValueLabel {
@@ -277,7 +271,7 @@ struct MonitorPanel: View {
                     }
                 }
             }
-            .chartYScale(domain: 0...max(1, Int(Double(maximumTokens) * 1.12)))
+            .chartYScale(domain: 0...max(1, maximum * 1.12))
             .chartOverlay { proxy in
                 GeometryReader { geometry in
                     Rectangle()
@@ -288,23 +282,23 @@ struct MonitorPanel: View {
                             case .active(let location):
                                 let plotFrame = geometry[proxy.plotAreaFrame]
                                 guard plotFrame.contains(location) else {
-                                    hoveredDailyUsage = nil
+                                    hoveredDate = nil
                                     return
                                 }
                                 let x = location.x - plotFrame.origin.x
                                 guard let date: String = proxy.value(atX: x) else {
-                                    hoveredDailyUsage = nil
+                                    hoveredDate = nil
                                     return
                                 }
-                                hoveredDailyUsage = recentUsage.first(where: { $0.date == date })
+                                hoveredDate = date
                             case .ended:
-                                hoveredDailyUsage = nil
+                                hoveredDate = nil
                             }
                         }
                 }
             }
             .frame(height: 125)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoveredDailyUsage?.id)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hoveredDate)
         }
         .padding(12)
         .glassCard()
@@ -436,74 +430,87 @@ struct MonitorPanel: View {
 
     private var apiUsageCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("外部 API 用量").font(.subheadline.weight(.semibold))
-                Spacer()
-                HStack(spacing: 4) {
-                    Circle().fill(monitor.apiMonitorAvailable ? Color.green : Color.orange).frame(width: 6, height: 6)
-                    Text(monitor.apiMonitorAvailable ? "接收端已启动" : "接收端未启动")
+            DisclosureGroup(isExpanded: $showsAPIDetails) {
+                if showsAPIDetails {
+                    apiDetails
+                        .onAppear { monitor.setAPIDetails(panel, expanded: true) }
+                        .onDisappear { monitor.setAPIDetails(panel, expanded: false) }
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
-            if let error = monitor.apiReadError { Text(error).font(.caption2).foregroundStyle(.orange) }
-            if let time = monitor.apiReadAt {
-                TimelineView(.periodic(from: .now, by: 1)) { tick in
-                    if tick.date.timeIntervalSince(time) > 20 {
-                        Text("API 数据可能过期，请刷新本地记录").font(.caption2).foregroundStyle(.orange)
-                    }
+            } label: {
+                HStack {
+                    Text("API 明细").font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(monitor.apiReceiverEnabled ? (monitor.apiMonitorAvailable ? "接收中" : "接收端未就绪") : "本机接收未启用")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            Text("只统计已上报的调用；更换 API 地址不会自动接入。")
-                .font(.caption2).foregroundStyle(.secondary)
-            ForEach(monitor.apiQuotaSummaries) { quota in
-                apiQuotaRow(quota)
-                if quota.id != monitor.apiQuotaSummaries.last?.id { Divider() }
+            if !showsAPIDetails, let provider = monitor.menuAPIProvider {
+                let quota = monitor.apiQuota(for: provider)
+                Text("\(quota.displayName) · \(monitor.apiActivity[provider] == nil ? "暂无上报" : "已记录 " + compact(quota.usedTokens) + " tokens")")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            Divider()
-            if monitor.apiRecords.isEmpty {
-                Text("支持 OpenAI、DeepSeek 及 OpenAI 兼容模型；记录 API 响应中的 usage，不保存提示词、回复或密钥。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12).glassCard()
+    }
+
+    private var apiDetails: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let error = monitor.apiReadError {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+            if monitor.apiReadAt == nil {
+                if monitor.apiReadError == nil { Text("正在读取本地明细…").font(.caption) }
             } else {
-                ForEach(Array(monitor.apiRecords.prefix(8))) { record in
-                    HStack(spacing: 9) {
-                        Text(record.provider.uppercased())
-                            .font(.system(size: 8, weight: .bold))
-                            .padding(.horizontal, 5).padding(.vertical, 3)
-                            .background(Color.purple.opacity(0.13), in: Capsule())
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(record.displayTaskName).font(.caption.weight(.medium)).lineLimit(1)
-                            Text("\(record.model) · \(record.capturedAt, style: .relative)")
-                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Text("只统计已上报的调用；更换 API 地址不会自动接入。")
+                    .font(.caption2).foregroundStyle(.secondary)
+                let quotas = monitor.apiQuotaSummaries
+                ForEach(quotas) { quota in
+                    apiQuotaRow(quota)
+                    if quota.id != quotas.last?.id { Divider() }
+                }
+                if !quotas.isEmpty { Divider() }
+                if monitor.apiRecords.isEmpty {
+                    Text("暂无调用记录")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    ForEach(monitor.apiRecords) { record in
+                        HStack(spacing: 9) {
+                            Text(record.provider.uppercased())
+                                .font(.system(size: 8, weight: .bold))
+                                .padding(.horizontal, 5).padding(.vertical, 3)
+                                .background(Color.purple.opacity(0.13), in: Capsule())
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(record.displayTaskName).font(.caption.weight(.medium)).lineLimit(1)
+                                Text("\(record.model) · \(record.capturedAt, style: .relative)")
+                                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 6)
+                            Text(compact(record.totalTokens))
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                            Text("tokens").font(.caption2).foregroundStyle(.secondary)
                         }
-                        Spacer(minLength: 6)
-                        Text(compact(record.totalTokens))
-                            .font(.caption.monospacedDigit().weight(.semibold))
-                        Text("tokens").font(.caption2).foregroundStyle(.secondary)
+                        .padding(.vertical, 3).usageHover()
+                        .help("\(record.displayTaskName)\n\(record.model) · \(record.totalTokens.formatted()) tokens\n来源：\(record.source)")
+                        if record.id != monitor.apiRecords.last?.id { Divider() }
                     }
-                    .padding(.vertical, 3).usageHover()
-                    .help("\(record.displayTaskName)\n\(record.model) · \(record.totalTokens.formatted()) tokens\n来源：\(record.source)")
-                    if record.id != monitor.apiRecords.prefix(8).last?.id { Divider() }
                 }
             }
         }
-        .padding(12)
-        .glassCard()
     }
 
     private func apiQuotaRow(_ quota: APIQuotaSummary) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let activity = monitor.apiActivity[quota.provider]
+        return VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(quota.displayName).font(.caption.weight(.semibold))
-                    Text("已记录 \(compact(quota.usedTokens)) tokens")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    if activity != nil { Text("已记录 \(compact(quota.usedTokens)) tokens")
+                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
                 }
                 Spacer()
-                if let remainingPercent = quota.remainingPercent {
+                if activity != nil, let remainingPercent = quota.remainingPercent {
                     RemainingRing(
                         remainingPercent: remainingPercent,
                         size: 42,
@@ -512,7 +519,7 @@ struct MonitorPanel: View {
                     )
                 }
             }
-            if let activity = monitor.apiActivity[quota.provider] {
+            if let activity {
                 HStack {
                     Text("已收到 \(activity.count) 条记录")
                     Spacer()
@@ -521,7 +528,7 @@ struct MonitorPanel: View {
             } else {
                 Text("等待首次上报 · 尚不能判断实际消耗").font(.caption2).foregroundStyle(.orange)
             }
-            if let remaining = quota.remainingTokens,
+            if activity != nil, let remaining = quota.remainingTokens,
                let budget = quota.budgetTokens,
                let remainingPercent = quota.remainingPercent {
                 ProgressView(value: remainingPercent, total: 100)
@@ -533,7 +540,7 @@ struct MonitorPanel: View {
                 }
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
-            } else {
+            } else if quota.budgetTokens == nil {
                 Text("可在设置中填写本地 Token 预算")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -578,6 +585,9 @@ struct MonitorPanel: View {
             Group {
                 Divider()
                 Text("API 监控").font(.headline)
+                Toggle("启用本机 API 接收端", isOn: Binding(
+                    get: { monitor.apiReceiverEnabled }, set: { monitor.setAPIReceiverEnabled($0) }
+                ))
                 Picker("菜单栏圆环显示", selection: $monitor.menuQuotaSource) {
                     ForEach(MenuQuotaSource.allCases) { source in
                         Text(source.label).tag(source)
@@ -634,7 +644,7 @@ struct MonitorPanel: View {
             if monitor.snapshot.capturedAt > .distantPast {
                 Text("额度更新于 ") + Text(monitor.snapshot.capturedAt, style: .relative)
             } else {
-                Text("尚未更新")
+                Text("尚无账号额度记录")
             }
             Spacer()
             Button { monitor.refresh() } label: {
@@ -682,13 +692,6 @@ struct MonitorPanel: View {
     private func compact(_ number: Int?) -> String {
         guard let number else { return "—" }
         return number.formatted(.number.notation(.compactName))
-    }
-
-    private func chartAxisDates(from usage: [DailyUsage]) -> [String] {
-        guard !usage.isEmpty else { return [] }
-        let last = usage.count - 1
-        let indexes = Set([0, last / 3, (last * 2) / 3, last])
-        return indexes.sorted().map { usage[$0].date }
     }
 
     private func chartDateLabel(_ value: String) -> String {

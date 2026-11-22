@@ -7,6 +7,7 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var taskRecords: [TaskUsageRecord]
     @Published private(set) var apiRecords: [APIUsageRecord] = []
     @Published private(set) var apiMonitorAvailable = false
+    @Published private(set) var apiReceiverEnabled: Bool
     @Published private(set) var connectionState: MonitorConnectionState = .starting
     @Published private(set) var lastError: String?
     @Published private(set) var isRefreshing = false
@@ -64,14 +65,21 @@ final class MonitorStore: ObservableObject {
         static let menuQuotaSource = "menu.quotaSource"
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
     private let worker = DispatchQueue(label: "token-monitor.collector", qos: .utility)
     private let taskWorker = DispatchQueue(label: "token-monitor.local-records", qos: .utility)
     private let contextWorker = DispatchQueue(label: "token-monitor.context", qos: .userInitiated)
     enum DetailPanel { case mainWindow, menuPopover }
     private var visiblePanels: Set<DetailPanel> = []
     private(set) var detailGeneration = 0
-    private var isReadingMenuBudget = false
+    private enum APIReadDemand: Equatable { case none, budget(String), details }
+    private var apiDetailPanels: Set<DetailPanel> = []
+    private var apiDemand: APIReadDemand = .none
+    private var apiGeneration = 0
+    private var apiReadInFlight = false
+    private let receiverWorker = DispatchQueue(label: "token-monitor.api-receiver", qos: .utility)
+    private let receiverKey = DispatchSpecificKey<Bool>()
+    private let apiPort: Int
     private var contextReadPending = false
     private let workerKey = DispatchSpecificKey<Bool>()
     private var timer: DispatchSourceTimer?
@@ -87,12 +95,27 @@ final class MonitorStore: ObservableObject {
     private var terminationObserver: NSObjectProtocol?
     private var updateCheckTask: URLSessionDataTask?
 
-    init(storageDirectory: URL? = nil) {
+    init(storageDirectory: URL? = nil, apiPort: Int = 47821, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        self.apiPort = apiPort
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         dataDirectory = storageDirectory ?? support.appendingPathComponent("Token Usage Monitor", isDirectory: true)
         snapshotURL = dataDirectory.appendingPathComponent("menu-snapshot.json")
         subscriptionAnchor = SubscriptionPreferences(defaults: defaults).loadAnchor()
         taskRecordsURL = dataDirectory.appendingPathComponent("task-usage.json")
+        let preferenceKey = "api.receiver.enabled"
+        if let saved = defaults.object(forKey: preferenceKey) as? Bool {
+            apiReceiverEnabled = saved
+        } else {
+            // Decide before creating any new desktop state. An MCP-only SQLite
+            // database can exist before the desktop app has ever been opened.
+            let legacyReceiver = [snapshotURL, taskRecordsURL, dataDirectory.appendingPathComponent("menu-monitor.log")]
+                .contains { FileManager.default.fileExists(atPath: $0.path) }
+                || defaults.object(forKey: Keys.menuQuotaSource) != nil || defaults.object(forKey: "api.channels") != nil
+                || Self.hasPreviousAPIRecords(in: dataDirectory)
+            apiReceiverEnabled = legacyReceiver
+            defaults.set(legacyReceiver, forKey: preferenceKey)
+        }
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dataDirectory.path)
 
@@ -119,6 +142,7 @@ final class MonitorStore: ObservableObject {
         selectedAPIChannel = defaults.string(forKey: "api.selectedChannel") ?? ""
         if let data = defaults.data(forKey: "api.channels"),
            let saved = try? JSONDecoder().decode([APIChannel].self, from: data) { apiChannels = saved }
+        receiverWorker.setSpecific(key: receiverKey, value: true)
         worker.setSpecific(key: workerKey, value: true)
         UNUserNotificationCenter.current().delegate = notificationDelegate
         terminationObserver = NotificationCenter.default.addObserver(
@@ -203,7 +227,9 @@ final class MonitorStore: ObservableObject {
 
     var apiQuotaSummaries: [APIQuotaSummary] {
         var providers = Set(apiActivity.keys)
-        providers.formUnion(["openai", "deepseek"])
+        if let menuAPIProvider { providers.insert(menuAPIProvider) }
+        if parseTokenBudget(openAIBudgetText) != nil { providers.insert("openai") }
+        if parseTokenBudget(deepSeekBudgetText) != nil { providers.insert("deepseek") }
         providers.formUnion(apiChannels.map(\.id))
         let preferred = ["openai", "deepseek"]
         return providers.sorted {
@@ -254,7 +280,7 @@ final class MonitorStore: ObservableObject {
         timer.resume()
 
         updateLocalPolling()
-        worker.async { [weak self] in self?.startAPIUsageServer() }
+        if apiReceiverEnabled { receiverWorker.async { [weak self] in self?.startAPIUsageServer() } }
     }
 
     func setPanel(_ panel: DetailPanel, visible: Bool) {
@@ -272,11 +298,14 @@ final class MonitorStore: ObservableObject {
             contextReadAt = nil
             updateLocalPolling()
         } else if visible {
+            updateAPIReadDemand()
             refreshTasks()
+        } else {
+            updateAPIReadDemand()
         }
     }
 
-    private var menuAPIProvider: String? {
+    var menuAPIProvider: String? {
         switch menuQuotaSource {
         case .codex: return nil
         case .openAI: return "openai"
@@ -288,6 +317,7 @@ final class MonitorStore: ObservableObject {
     private func updateLocalPolling() {
         taskTimer?.cancel()
         taskTimer = nil
+        updateAPIReadDemand()
         guard !stopped, !visiblePanels.isEmpty || menuAPIProvider != nil else { return }
         refreshLocalUsage()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -303,19 +333,75 @@ final class MonitorStore: ObservableObject {
             refreshTasks()
             return
         }
-        guard let provider = menuAPIProvider, !isReadingMenuBudget else { return }
-        isReadingMenuBudget = true
-        let generation = detailGeneration
+        refreshAPIUsage()
+    }
+
+    func setAPIDetails(_ panel: DetailPanel, expanded: Bool) {
+        if expanded { apiDetailPanels.insert(panel) } else { apiDetailPanels.remove(panel) }
+        updateAPIReadDemand()
+    }
+
+    private func updateAPIReadDemand() {
+        let demand: APIReadDemand = !visiblePanels.isDisjoint(with: apiDetailPanels)
+            ? .details : menuAPIProvider.map(APIReadDemand.budget) ?? .none
+        guard demand != apiDemand else { return }
+        apiDemand = demand
+        apiGeneration += 1
+        apiRecords = []
+        apiReadAt = nil
+        apiReadError = nil
+        refreshAPIUsage()
+    }
+
+    private func refreshAPIUsage() {
+        guard !stopped, !apiReadInFlight, apiDemand != .none else { return }
+        let demand = apiDemand
+        let generation = apiGeneration
+        let checkListener = apiReceiverEnabled && demand == .details
+        apiReadInFlight = true
         taskWorker.async { [weak self] in
             guard let self else { return }
-            let result = Result { try self.readAPIActivity(provider: provider) }
+            let result = Result { () -> ([String: APIActivity], [APIUsageRecord]) in
+                if case .budget(let provider) = demand { return (try self.readAPIActivity(provider: provider), []) }
+                return (try self.readAPIActivity(), try self.readAPIUsageRecords())
+            }
+            let healthy = checkListener ? self.isAPIUsageServerHealthy() : nil
             DispatchQueue.main.async {
-                self.isReadingMenuBudget = false
-                guard !self.stopped, self.visiblePanels.isEmpty, self.detailGeneration == generation,
-                      provider == self.menuAPIProvider, case .success(let activity) = result else { return }
-                if self.apiActivity[provider] != activity[provider] { self.apiActivity[provider] = activity[provider] }
+                self.apiReadInFlight = false
+                guard !self.stopped else { return }
+                guard generation == self.apiGeneration else { self.refreshAPIUsage(); return }
+                if let healthy, self.apiReceiverEnabled { self.apiMonitorAvailable = healthy }
+                switch result {
+                case .success(let (activity, rows)):
+                    if case .budget(let provider) = demand {
+                        if self.apiActivity[provider] != activity[provider] { self.apiActivity[provider] = activity[provider] }
+                    } else {
+                        self.apiActivity = activity
+                        self.apiRecords = rows
+                        self.apiReadAt = Date()
+                        self.apiReadError = nil
+                    }
+                case .failure:
+                    if demand == .details { self.apiReadError = "未能读取 API 明细，请稍后刷新。" }
+                }
             }
         }
+    }
+
+    func setAPIReceiverEnabled(_ enabled: Bool) {
+        guard enabled != apiReceiverEnabled else { return }
+        apiReceiverEnabled = enabled
+        defaults.set(enabled, forKey: "api.receiver.enabled")
+        apiMonitorAvailable = false
+        receiverWorker.async { [weak self] in
+            if enabled { self?.startAPIUsageServer() } else { self?.stopAPIUsageServer() }
+        }
+    }
+
+    private func stopAPIUsageServer() {
+        guard let process = apiServerProcess else { return }
+        apiServerProcess = nil
+        if process.isRunning { process.terminate(); process.waitUntilExit() }
     }
 
     func stop() {
@@ -326,13 +412,11 @@ final class MonitorStore: ObservableObject {
         taskTimer = nil
         updateCheckTask?.cancel()
         updateCheckTask = nil
+        if DispatchQueue.getSpecific(key: receiverKey) == true { stopAPIUsageServer() }
+        else { receiverWorker.sync { stopAPIUsageServer() } }
         let closeClient = { [weak self] in
             self?.client?.close()
             self?.client = nil
-            if let process = self?.apiServerProcess, process.isRunning {
-                process.terminate()
-            }
-            self?.apiServerProcess = nil
         }
         if DispatchQueue.getSpecific(key: workerKey) == true { closeClient() }
         else { worker.sync(execute: closeClient) }
@@ -425,16 +509,14 @@ final class MonitorStore: ObservableObject {
         do {
             if forceReconnect { client?.close(); client = nil }
             if client == nil {
-                DispatchQueue.main.async { self.connectionState = .starting }
                 let newClient = AppServerClient(logURL: dataDirectory.appendingPathComponent("menu-monitor.log"))
                 newClient.onNotification = { [weak self] method, _ in
                     if method == "account/rateLimits/updated" {
                         self?.worker.async { self?.collect(forceReconnect: false) }
                     }
                 }
-                let mode = try newClient.connect()
+                _ = try newClient.connect()
                 client = newClient
-                DispatchQueue.main.async { self.connectionState = .connected(mode) }
             }
             guard let client else { throw MonitorError.processEnded }
 
@@ -455,16 +537,14 @@ final class MonitorStore: ObservableObject {
             }
             let quotaFailure = QuotaRefreshPolicy.isAuthenticationFailure(errors)
                 ? "额度连接的登录状态已失效，正在重新连接；持续失败时请在 ChatGPT 中重新登录。"
-                : "账户额度暂时无法更新，正在显示历史记录；本地任务与上下文会继续读取。"
+                : "未取得新的账号额度，将自动重试。"
 
             guard !usage.isEmpty || !limits.isEmpty else {
                 let hasCachedQuota = !snapshot.rateWindows.isEmpty
                 DispatchQueue.main.async {
-                    self.lastError = hasCachedQuota
-                        ? quotaFailure
-                        : "暂时无法读取账户额度，应用会自动重试。"
+                    self.lastError = quotaFailure
                     self.isRefreshing = false
-                    self.connectionState = hasCachedQuota ? .cached : .retrying("正在自动重试")
+                    self.connectionState = .disconnected(hasCache: hasCachedQuota)
                 }
                 return
             }
@@ -481,7 +561,7 @@ final class MonitorStore: ObservableObject {
                 self.isRefreshing = false
                 self.connectionState = validQuota
                     ? .connected(client.connectionMode ?? "已连接")
-                    : .cached
+                    : .disconnected(hasCache: !updated.rateWindows.isEmpty)
             }
         } catch {
             client?.close()
@@ -489,11 +569,9 @@ final class MonitorStore: ObservableObject {
             consecutiveQuotaFailures += 1
             let hasCachedQuota = !snapshot.rateWindows.isEmpty
             DispatchQueue.main.async {
-                self.lastError = hasCachedQuota
-                    ? "账户额度暂时无法更新，正在显示上次数据；任务 Token 记录不受影响。"
-                    : self.friendlyConnectionError(error)
+                self.lastError = self.friendlyConnectionError(error)
                 self.isRefreshing = false
-                self.connectionState = hasCachedQuota ? .cached : .retrying("正在自动重试")
+                self.connectionState = .disconnected(hasCache: hasCachedQuota)
             }
         }
     }
@@ -509,12 +587,10 @@ final class MonitorStore: ObservableObject {
         guard !stopped, !visiblePanels.isEmpty, !isRefreshingTasks else { return }
         let generation = detailGeneration
         isRefreshingTasks = true
+        refreshAPIUsage()
         taskWorker.async { [weak self] in
             guard let self else { return }
             let tasks = Result { try self.readTaskRecords() }
-            let apis = Result { try self.readAPIUsageRecords() }
-            let activity = Result { try self.readAPIActivity() }
-            let healthy = self.isAPIUsageServerHealthy()
             DispatchQueue.main.async {
                 self.isRefreshingTasks = false
                 guard !self.stopped, !self.visiblePanels.isEmpty else { return }
@@ -541,15 +617,6 @@ final class MonitorStore: ObservableObject {
                 case .failure:
                     self.taskReadError = "读取失败，保留上次任务数据"
                 }
-                do {
-                    let rows = try apis.get()
-                    let received = try activity.get()
-                    self.apiRecords = rows
-                    self.apiActivity = received
-                    self.apiReadError = nil
-                    self.apiReadAt = Date()
-                } catch { self.apiReadError = "读取失败，保留上次 API 数据" }
-                self.apiMonitorAvailable = healthy
                 self.refreshContext()
             }
         }
@@ -597,7 +664,7 @@ final class MonitorStore: ObservableObject {
         let unavailable = ContextSnapshot(threadId: threadID, source: "unavailable", error: "read_failed")
         guard let script = Bundle.main.url(forResource: "context_snapshot", withExtension: "py") else { return unavailable }
         do {
-            let data = try runLocalProcess(executable: "/usr/bin/python3", arguments: [script.path, "--thread-id", threadID])
+            let data = try Self.runLocalProcess(executable: "/usr/bin/python3", arguments: [script.path, "--thread-id", threadID])
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .secondsSince1970
             let value = try decoder.decode(ContextSnapshot.self, from: data)
@@ -605,7 +672,16 @@ final class MonitorStore: ObservableObject {
         } catch { return unavailable }
     }
 
-    private func runLocalProcess(executable: String, arguments: [String]) throws -> Data {
+    private static func hasPreviousAPIRecords(in directory: URL) -> Bool {
+        let database = directory.appendingPathComponent("usage.sqlite3")
+        guard FileManager.default.fileExists(atPath: database.path) else { return false }
+        let result = try? runLocalProcess(executable: "/usr/bin/sqlite3", arguments: [
+            "-readonly", database.path, "SELECT 1 FROM api_usage LIMIT 1;"
+        ])
+        return result == Data("1\n".utf8)
+    }
+
+    private static func runLocalProcess(executable: String, arguments: [String]) throws -> Data {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -636,7 +712,7 @@ final class MonitorStore: ObservableObject {
         SELECT LOWER(provider) AS provider, COUNT(*) AS count, SUM(total_tokens) AS total, MAX(captured_at) AS last
         FROM api_usage \(filter) GROUP BY LOWER(provider);
         """
-        let data = try runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path, query])
+        let data = try Self.runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path, query])
         guard !data.isEmpty else { return [:] }
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw MonitorError.invalidResponse }
         return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
@@ -648,7 +724,7 @@ final class MonitorStore: ObservableObject {
     private func startAPIUsageServer() {
         guard apiServerProcess == nil else { return }
         if isAPIUsageServerHealthy() {
-            DispatchQueue.main.async { self.apiMonitorAvailable = true }
+            DispatchQueue.main.async { self.apiMonitorAvailable = self.apiReceiverEnabled }
             return
         }
         guard let resources = Bundle.main.resourceURL else { return }
@@ -666,7 +742,7 @@ final class MonitorStore: ObservableObject {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [serverScript.path, "--port", "47821"]
+        process.arguments = [serverScript.path, "--port", String(apiPort)]
         process.currentDirectoryURL = resources
         var environment = ProcessInfo.processInfo.environment
         environment["TOKEN_USAGE_MONITOR_HOME"] = dataDirectory.path
@@ -684,11 +760,11 @@ final class MonitorStore: ObservableObject {
             apiServerProcess = process
             process.terminationHandler = { [weak self, weak process] _ in
                 guard let self, let process else { return }
-                self.worker.async {
+                self.receiverWorker.async {
                     guard self.apiServerProcess === process else { return }
                     self.apiServerProcess = nil
                     let isAvailable = self.isAPIUsageServerHealthy()
-                    DispatchQueue.main.async { self.apiMonitorAvailable = isAvailable }
+                    DispatchQueue.main.async { self.apiMonitorAvailable = self.apiReceiverEnabled && isAvailable }
                 }
             }
             let deadline = Date().addingTimeInterval(2)
@@ -697,14 +773,14 @@ final class MonitorStore: ObservableObject {
             }
             let isAvailable = isAPIUsageServerHealthy()
             if !isAvailable, process.isRunning { process.terminate() }
-            DispatchQueue.main.async { self.apiMonitorAvailable = isAvailable }
+            DispatchQueue.main.async { self.apiMonitorAvailable = self.apiReceiverEnabled && isAvailable }
         } catch {
             DispatchQueue.main.async { self.apiMonitorAvailable = false }
         }
     }
 
     private func isAPIUsageServerHealthy() -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:47821/health") else { return false }
+        guard let url = URL(string: "http://127.0.0.1:\(apiPort)/health") else { return false }
         var request = URLRequest(url: url)
         request.timeoutInterval = 0.75
         let semaphore = DispatchSemaphore(value: 0)
@@ -729,9 +805,9 @@ final class MonitorStore: ObservableObject {
                input_tokens AS inputTokens, cached_input_tokens AS cachedInputTokens,
                output_tokens AS outputTokens, reasoning_tokens AS reasoningTokens,
                total_tokens AS totalTokens, source
-        FROM api_usage ORDER BY captured_at DESC, id DESC LIMIT 100;
+        FROM api_usage ORDER BY captured_at DESC, id DESC LIMIT 8;
         """
-        let data = try runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path, query])
+        let data = try Self.runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path, query])
         guard !data.isEmpty else { return [] }
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw MonitorError.invalidResponse }
         return rows.compactMap { row in
@@ -764,7 +840,7 @@ final class MonitorStore: ObservableObject {
         }
 
         let query = TaskUsageRecord.historyQuery
-        let data = try runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", databaseURL.path, query])
+        let data = try Self.runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", databaseURL.path, query])
         guard !data.isEmpty else { return [] }
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw MonitorError.invalidResponse

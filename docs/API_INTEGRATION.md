@@ -10,7 +10,7 @@ POST http://127.0.0.1:47821/v1/usage
 Content-Type: application/json
 ```
 
-The macOS application must be running. Check availability with:
+Run the macOS app and enable “启用本机 API 接收端” in settings. Existing desktop installations retain their listener on upgrade. Folding the details panel keeps an enabled receiver running. Check availability with:
 
 ```bash
 curl http://127.0.0.1:47821/health

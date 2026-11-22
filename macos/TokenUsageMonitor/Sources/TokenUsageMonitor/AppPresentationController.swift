@@ -65,7 +65,7 @@ final class AppPresentationController: NSObject, ObservableObject, NSWindowDeleg
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.contentView = NSHostingView(
-            rootView: MonitorPanel(monitor: monitor, presentationController: self)
+            rootView: MonitorPanel(panel: .mainWindow, monitor: monitor, presentationController: self)
         )
         window.setFrameAutosaveName(Keys.mainWindowFrame)
         if !window.setFrameUsingName(Keys.mainWindowFrame) { window.center() }

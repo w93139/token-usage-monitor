@@ -6,6 +6,8 @@
 
 本地优先的 Codex 插件与 macOS 菜单栏应用，用于查看任务 Token、API 用量、额度窗口和重置时间。提示词、回复正文、API Key 和账号邮箱不会被持久化。
 
+账号断线时会显示是否有历史额度。任务卡分别显示最近实测上报、重置或估计事件的时间以及本地检查时间。API 明细和用量详情默认收起。趋势覆盖今天及之前 13 个本地自然日，空缺表示未上报。已有桌面安装升级时保留 API 接收。
+
 ## 安装与运行
 
 从 [最新 Release](https://github.com/w93139/token-usage-monitor/releases/latest) 下载 macOS arm64 ZIP，解压后将 `Token监测.app` 移入“应用程序”并启动。要求 Apple Silicon、macOS 13+，以及已登录的本地 Codex／ChatGPT 环境。
@@ -56,7 +58,7 @@ python3 scripts/reset_credit_worker.py --disable
 
 ## API 接入
 
-运行 macOS 应用后，可向仅绑定本机的 `POST http://127.0.0.1:47821/v1/usage` 上报响应中的 usage 元数据，也可调用插件的 `record_api_usage`。支持 OpenAI 与兼容接口的计数字段；最终 usage 缺失时不记录，重复请求不累加。
+新安装的 macOS 应用在设置中打开“启用本机 API 接收端”后，可向仅绑定本机的 `POST http://127.0.0.1:47821/v1/usage` 上报响应中的 usage 元数据，也可调用插件的 `record_api_usage`。支持 OpenAI 与兼容接口的计数字段；最终 usage 缺失时不记录，重复请求不累加。
 
 监测器不代理模型请求，不截取 HTTPS 流量，也不需要服务商密钥。调用方只发送用量计数与必要的标识，不能发送提示词、回复正文或凭据。载荷、流式示例与渠道设置见 [API 接入指南](docs/API_INTEGRATION.md)。
 

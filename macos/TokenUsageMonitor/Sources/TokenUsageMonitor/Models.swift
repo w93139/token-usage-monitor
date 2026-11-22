@@ -65,6 +65,26 @@ struct DailyUsage: Codable, Identifiable, Equatable {
     var id: String { date }
 }
 
+struct TrendDay: Identifiable, Equatable {
+    let date: String
+    let tokens: Int?
+    var id: String { date }
+
+    static func fortnight(_ buckets: [DailyUsage], ending now: Date = Date(), timeZone: TimeZone = .current) -> [Self] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let today = calendar.startOfDay(for: now)
+        var byDate: [String: Int] = [:]
+        for bucket in buckets where bucket.tokens >= 0 { byDate[bucket.date] = bucket.tokens }
+        return (-13...0).compactMap { offset in
+            guard let day = calendar.date(byAdding: .day, value: offset, to: today) else { return nil }
+            let parts = calendar.dateComponents([.year, .month, .day], from: day)
+            let key = String(format: "%04d-%02d-%02d", parts.year!, parts.month!, parts.day!)
+            return Self(date: key, tokens: byDate[key])
+        }
+    }
+}
+
 struct AppUpdateInfo: Equatable {
     var version: String
     var pageURL: URL
@@ -151,10 +171,22 @@ struct ContextSnapshot: Decodable, Equatable {
         return Double(tokens) / Double(window) * 100
     }
 
+    var eventTimeLabel: String {
+        switch error {
+        case nil: return "任务最近实测上报"
+        case "context_reset": return "上下文重置记录"
+        case "context_estimated": return "估计值上报"
+        default: return "任务最近事件"
+        }
+    }
+
     var unavailableReason: String {
         switch error {
-        case "context_reset": return "上下文已压缩或清空，等待下一次用量上报"
-        case "context_estimated": return "目前只有压缩后的估计值，等待下一次调用的准确统计"
+        case "context_reset": return "上下文已压缩或重置，等待下一次实测上报"
+        case "context_estimated": return "目前只有估计值，等待下一次实测上报"
+        case "usage_not_found": return "此任务尚无上下文用量上报"
+        case "usage_not_in_tail": return "最近的日志中没有用量上报，等待下一次实测"
+        case "rollout_missing", "rollout_unavailable": return "此任务的本地日志暂不可读"
         case "read_failed": return "上下文读取失败，正在重试；不会继续展示旧任务数据"
         default: return "暂未取得可用的上下文统计；不会用任务累计值代替"
         }
@@ -332,7 +364,7 @@ struct UsageSnapshot: Codable, Equatable {
             guard let date = item.string("startDate"), let tokens = item.integer("tokens") else { return nil }
             return DailyUsage(date: date, tokens: tokens)
         }.sorted { $0.date < $1.date }
-        let days = usage.isEmpty ? fallback.dailyUsage : parsedDays
+        let days = usage["dailyUsageBuckets"] is [[String: Any]] ? parsedDays : fallback.dailyUsage
 
         let parsedWindows = QuotaRefreshPolicy.windows(from: limits)
         let validQuota = !parsedWindows.isEmpty
@@ -375,16 +407,18 @@ enum MonitorConnectionState: Equatable {
     case starting
     case connected(String)
     case cached
-    case retrying(String)
+    case retrying
     case stopped
+
+    static func disconnected(hasCache: Bool) -> Self { hasCache ? .cached : .retrying }
 
     var label: String {
         switch self {
-        case .starting: return "正在连接"
-        case .connected: return "实时监控中"
-        case .cached: return "显示缓存额度"
-        case .retrying: return "等待重连"
-        case .stopped: return "已停止"
+        case .starting: return "正在读取账号额度"
+        case .connected: return "账号额度已更新"
+        case .cached: return "账号额度待重连 · 显示上次数据"
+        case .retrying: return "账号额度待重连"
+        case .stopped: return "额度监测已停止"
         }
     }
 

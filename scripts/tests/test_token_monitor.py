@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import date, timedelta
 from unittest.mock import patch
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -37,6 +38,12 @@ class UsageStoreTests(unittest.TestCase):
         )
         summary = self.store.summary()
         self.assertEqual(summary["accountUsage"]["lifetimeTokens"], 1234)
+
+    def test_history_uses_local_calendar_dates_and_excludes_future(self):
+        today = date.today()
+        dates = [(today + timedelta(days=n)).isoformat() for n in (-14, -13, -1, 0, 1)]
+        self.store.save_usage({"dailyUsageBuckets": [{"startDate": day, "tokens": i} for i, day in enumerate(dates)]})
+        self.assertEqual([row["start_date"] for row in self.store.history(14)], dates[1:4])
 
     def test_rate_limit_flatten_and_credit_round_trip(self):
         payload = {

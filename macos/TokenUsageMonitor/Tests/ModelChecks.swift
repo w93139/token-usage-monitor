@@ -142,6 +142,23 @@ struct ModelChecks {
         let dst = calendar.date(from: DateComponents(year: 2026, month: 3, day: 8))!
         let nextDay = calendar.date(from: DateComponents(year: 2026, month: 3, day: 9))!
         require(SubscriptionRenewal.remainingDays(until: nextDay, now: dst, calendar: calendar) == 1, "Day count survives daylight saving")
+        require(MonitorConnectionState.disconnected(hasCache: false) == .retrying, "Empty failed quota is retrying")
+        require(MonitorConnectionState.disconnected(hasCache: true) == .cached, "Failed quota with previous windows is historical")
+        require(snapshot.eventTimeLabel.contains("实测") && missing.eventTimeLabel.contains("重置") && estimate.eventTimeLabel.contains("估计"), "Use the time of the corresponding event")
+        let sparse = [DailyUsage(date: "2026-10-25", tokens: 2), DailyUsage(date: "2026-10-25", tokens: 3),
+                      DailyUsage(date: "2026-11-07", tokens: 0), DailyUsage(date: "2026-11-08", tokens: 30),
+                      DailyUsage(date: "2026-10-24", tokens: 40), DailyUsage(date: "2026-11-7", tokens: 55)]
+        let utcMorning = ISO8601DateFormatter().date(from: "2026-11-08T04:00:00Z")!
+        let ny = TimeZone(identifier: "America/New_York")!
+        let fortnight = TrendDay.fortnight(sparse, ending: utcMorning, timeZone: ny)
+        require(fortnight.count == 14 && fortnight.first?.date == "2026-10-25" && fortnight.last?.date == "2026-11-07", "Local midnight and DST boundaries")
+        require(fortnight.compactMap(\.tokens) == [3, 0] && fortnight[1].tokens == nil, "Exclude old, future and malformed dates; zero differs from missing")
+        let yearBoundary = TrendDay.fortnight([], ending: ISO8601DateFormatter().date(from: "2026-01-01T16:10:00Z")!, timeZone: TimeZone(identifier: "Asia/Shanghai")!)
+        require(yearBoundary.first?.date == "2025-12-20" && yearBoundary.last?.date == "2026-01-02" && yearBoundary.allSatisfy { $0.tokens == nil }, "Year boundary and empty window")
+        var historyCache = UsageSnapshot.empty
+        historyCache.dailyUsage = sparse
+        require(UsageSnapshot.refreshed(usage: ["summary": [:]], limits: [:], fallback: historyCache).dailyUsage == sparse, "Missing buckets preserve cache")
+        require(UsageSnapshot.refreshed(usage: ["dailyUsageBuckets": []], limits: [:], fallback: historyCache).dailyUsage.isEmpty, "Explicit empty buckets clear cache")
         print("Swift model checks passed: quota freshness, reconnect policy, unknown values, context compaction, task switching and privacy")
     }
 }

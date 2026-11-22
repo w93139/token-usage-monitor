@@ -92,7 +92,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSPopoverDele
         panel.behavior = .transient
         panel.delegate = self
         panel.contentViewController = NSHostingController(rootView:
-            MonitorPanel(monitor: monitor, presentationController: presentation)
+            MonitorPanel(panel: .menuPopover, monitor: monitor, presentationController: presentation)
         )
         panel.contentSize = NSSize(width: 420, height: 640)
         popover = panel

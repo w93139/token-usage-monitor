@@ -2,6 +2,12 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.7.8] - 2026-11-22
+
+- Distinguish an initial quota read, a disconnected account with or without cached limits, task event timestamps and local checks. After compression, wait for measured usage.
+- Collapse API calls and usage details by default. Expand to query the latest eight API calls or chart the last fourteen local calendar dates. Missing daily reports stay unknown and totals cover reported days only.
+- New desktop installations can enable the loopback receiver in settings. Existing desktop installations retain receiving, including while details are closed.
+
 ## [1.7.7] - 2026-11-22
 
 - Pause desktop task, API detail and context reads when both detail panels are closed, hidden or minimized. Opening a panel refreshes immediately. Task caches update only when rows change. A selected external API menu-bar budget continues to update while the panels are closed.

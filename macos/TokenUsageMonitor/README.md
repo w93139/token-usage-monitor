@@ -2,7 +2,7 @@
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
-## Version 1.7.7
+## Version 1.7.8
 
 Right-click or Control-click the menu-bar percentage to quit directly. A primary click toggles the monitor popover.
 
@@ -25,7 +25,7 @@ Context reads only usage/reset metadata from a bounded in-memory tail of the sel
 - Exact consumed percentage beneath each remaining-quota bar
 - Cached quota fallback with a friendly automatic-retry status during network interruptions
 - Product Logo in the panel and macOS application icon
-- Daily token chart and account summary
+- Collapsed usage details with account summary and 14 local calendar dates including today. Unreported days remain gaps. API call rows load on expansion.
 - Mouse-hover details with exact date and Token count on the recent-usage chart
 - Automatic panel opening when the app launches
 - Header pin switch for a compact always-front quota badge across macOS Spaces

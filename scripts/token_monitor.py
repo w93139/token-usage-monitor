@@ -533,7 +533,8 @@ class UsageStore:
         with self._lock, self._connect() as conn:
             rows = conn.execute(
                 "SELECT start_date, tokens, captured_at FROM daily_usage "
-                "WHERE start_date >= date('now', ?) ORDER BY start_date",
+                "WHERE start_date BETWEEN date('now', 'localtime', ?) AND date('now', 'localtime') "
+                "AND start_date = date(start_date, '+0 days') AND typeof(tokens) = 'integer' AND tokens >= 0 ORDER BY start_date",
                 (f"-{max(0, days - 1)} days",),
             ).fetchall()
         return [dict(row) for row in rows]

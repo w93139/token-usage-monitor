@@ -33,35 +33,28 @@ struct ContextUsageCard: View {
                             ProgressView(value: min(100, percent), total: 100)
                             Text("运行时容量 \((snapshot.window ?? 0).formatted()) tokens").font(.caption2).foregroundStyle(.secondary)
                         }
-                        if let time = snapshot.capturedAt {
-                            TimelineView(.periodic(from: .now, by: 1)) { tick in
-                                HStack(spacing: 4) {
-                                    Text(tick.date.timeIntervalSince(time) > 60 ? "历史快照 · 上报于" : "最近上报于")
-                                    Text(time, style: .relative)
-                                }.font(.caption2).foregroundStyle(tick.date.timeIntervalSince(time) > 60 ? Color.orange : Color.secondary)
-                            }
-                        }
                     } else {
                         Text(snapshot.unavailableReason).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let time = snapshot.capturedAt {
+                        let historical = snapshot.error == nil && Date().timeIntervalSince(time) > 60
+                        Text("\(historical ? "历史快照 · " : "")\(snapshot.eventTimeLabel) · \(time.formatted(date: .abbreviated, time: .standard))")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                 } else {
                     Text(monitor.isRefreshingContext ? "正在读取上下文…" : "上下文暂不可用").font(.caption).foregroundStyle(.secondary)
                 }
                 Text("此任务累计 \(task.tokens.formatted()) tokens")
                     .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            } else if monitor.tasksReadAt == nil {
+                Text(monitor.taskReadError ?? "正在读取本地任务…").font(.caption).foregroundStyle(.secondary)
             } else {
                 Text("暂无未归档的活动任务，可点“切换任务”查看历史。")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            TimelineView(.periodic(from: .now, by: 1)) { tick in
-                if monitor.isRefreshingContext {
-                    Text("正在读取本地上下文…").font(.caption2).foregroundStyle(.secondary)
-                } else if let read = monitor.contextReadAt {
-                    HStack(spacing: 3) {
-                        Text(tick.date.timeIntervalSince(read) > 20 ? "读取可能中断 · 检查于" : "本地监测中 · 检查于")
-                        Text(read, style: .relative)
-                    }.font(.caption2).foregroundStyle(tick.date.timeIntervalSince(read) > 20 ? Color.orange : Color.secondary)
-                }
+            if let read = monitor.contextReadAt {
+                Text("本地检查 · \(read.formatted(date: .omitted, time: .standard))")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
             Text("按本地任务更新时间跟随，不代表 Codex 前台任务。这里是最近上报的上下文快照，压缩或继续执行后可能变化。")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)

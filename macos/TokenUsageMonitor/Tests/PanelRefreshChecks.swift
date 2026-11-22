@@ -23,7 +23,12 @@ struct PanelRefreshChecks {
                                      ('b','Beta',800,1,3,'model',0,'user',NULL,'\(dir)/b.jsonl');
             """)
         let storage = folder.appendingPathComponent("monitor")
-        let store = MonitorStore(storageDirectory: storage)
+        let suite = "token-monitor.tests." + UUID().uuidString
+        let prefs = UserDefaults(suiteName: suite)!
+        defer { prefs.removePersistentDomain(forName: suite) }
+        let port = Int(CommandLine.arguments[2])!
+        let store = MonitorStore(storageDirectory: storage, apiPort: port, defaults: prefs)
+        precondition(!store.apiReceiverEnabled, "New installs default to no receiver")
         store.menuQuotaSource = .codex
         let api = storage.appendingPathComponent("usage.sqlite3")
         try sql(api, """
@@ -48,6 +53,14 @@ struct PanelRefreshChecks {
         store.setPanel(.mainWindow, visible: true)
         waitFor("Opening reads immediately") { store.contextSnapshot?.tokens == 240 }
         store.setPanel(.menuPopover, visible: true)
+        precondition(store.apiRecords.isEmpty && store.apiReadAt == nil, "No API detail query for a collapsed panel")
+        store.setAPIDetails(.mainWindow, expanded: true)
+        waitFor("Expanded rows load immediately") { store.apiRecords.count == 1 }
+        store.setAPIDetails(.menuPopover, expanded: true)
+        store.setAPIDetails(.mainWindow, expanded: false)
+        precondition(store.apiRecords.count == 1, "Second expanded panel retains demand")
+        store.setAPIDetails(.menuPopover, expanded: false)
+        precondition(store.apiRecords.isEmpty && store.apiReadAt == nil, "Last collapsed panel releases detail rows")
         store.setPanel(.mainWindow, visible: false)
         store.selectContextTask("b")
         store.selectContextTask("a")
@@ -91,7 +104,56 @@ struct PanelRefreshChecks {
         store.menuQuotaSource = .openAI
         waitFor("Selected API updates while hidden") { store.apiActivity["openai"]?.totalTokens == 85 && store.menuTitle == "15%" }
         precondition(store.tasksReadAt == closedRead && store.contextReadAt == nil)
+        // Use the isolated stdio fixture installed by test_models.sh.
+        precondition(ProcessInfo.processInfo.environment["CODEX_BINARY"] != nil)
+        let quotaFlag = folder.appendingPathComponent("valid-quota")
+        store.refresh()
+        waitFor("Usage-only response without cache waits for quota") { !store.isRefreshing && store.connectionState == .retrying }
+        try Data().write(to: quotaFlag)
+        store.refresh()
+        waitFor("Valid quota restores live state") { !store.isRefreshing && store.quotaIsCurrent }
+        let quotaTimestamp = store.snapshot.capturedAt
+        try FileManager.default.removeItem(at: quotaFlag)
+        store.refresh()
+        waitFor("Quota failure after success shows cached timestamp") { !store.isRefreshing && store.connectionState == .cached }
+        precondition(store.snapshot.capturedAt == quotaTimestamp && !store.quotaIsCurrent)
+        try Data().write(to: quotaFlag)
+        store.refresh()
+        waitFor("Recovery after cached state") { !store.isRefreshing && store.quotaIsCurrent }
         store.stop()
+
+        // A separate disposable installation exercises actual HTTP intake with no panels open.
+        let intake = folder.appendingPathComponent("receiver")
+        let receiver = MonitorStore(storageDirectory: intake, apiPort: port, defaults: prefs)
+        receiver.setAPIReceiverEnabled(true)
+        waitFor("Enabled receiver listens") { receiver.apiMonitorAvailable }
+        let curl = Process()
+        curl.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        curl.arguments = ["--noproxy", "*", "--max-time", "3", "-fsS", "-H", "Content-Type: application/json", "-d",
+            #"{"provider":"openai","model":"test","request_id":"local-only","usage":{"total_tokens":11}}"#,
+            "http://127.0.0.1:\(port)/v1/usage"]
+        curl.standardOutput = FileHandle.nullDevice
+        try curl.run()
+        curl.waitUntilExit()
+        precondition(curl.terminationStatus == 0 && receiver.apiRecords.isEmpty, "Folded receivable without detail reads")
+        receiver.setPanel(.mainWindow, visible: true)
+        receiver.setAPIDetails(.mainWindow, expanded: true)
+        waitFor("First expansion sees folded receipt") { receiver.apiRecords.first?.totalTokens == 11 }
+        receiver.setAPIReceiverEnabled(false)
+        receiver.stop()
+        precondition(!MonitorStore(storageDirectory: intake, apiPort: port, defaults: prefs).apiReceiverEnabled, "Disabled choice survives restart")
+        prefs.removeObject(forKey: "api.receiver.enabled")
+        prefs.removeObject(forKey: "menu.quotaSource")
+        precondition(MonitorStore(storageDirectory: intake, apiPort: port, defaults: prefs).apiReceiverEnabled, "Keep database-only prior API intake")
+        prefs.removeObject(forKey: "api.receiver.enabled")
+        let emptyDB = folder.appendingPathComponent("mcp-only")
+        try FileManager.default.createDirectory(at: emptyDB, withIntermediateDirectories: true)
+        try sql(emptyDB.appendingPathComponent("usage.sqlite3"), "CREATE TABLE api_usage(id INTEGER)")
+        precondition(!MonitorStore(storageDirectory: emptyDB, apiPort: port, defaults: prefs).apiReceiverEnabled, "An empty database does not opt into HTTP intake")
+        prefs.removeObject(forKey: "api.receiver.enabled")
+        try Data().write(to: intake.appendingPathComponent("menu-snapshot.json"))
+        precondition(MonitorStore(storageDirectory: intake, apiPort: port, defaults: prefs).apiReceiverEnabled, "Upgrade preserves legacy listener")
+
         print("Panel checks passed: \(Int(idle))s hidden, immediate reopen, two panels, rapid switching, compaction and hidden API budget")
     }
 }
