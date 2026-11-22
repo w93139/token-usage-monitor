@@ -20,7 +20,7 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests -v
 
   macos-build:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build release application
