@@ -134,6 +134,7 @@ struct APIChannel: Codable, Identifiable, Equatable {
 
 struct APIActivity: Equatable {
     var count: Int
+    var totalTokens: Int
     var lastReceivedAt: Date
 }
 
@@ -234,6 +235,23 @@ struct ContextTaskSelection {
 
     func accepts(_ request: Int, threadID: String, records: [TaskUsageRecord]) -> Bool {
         request == revision && selected(in: records)?.id == threadID
+    }
+}
+
+struct TaskPickerResults {
+    let active: [TaskUsageRecord]
+    let archived: [TaskUsageRecord]
+    let matches: [TaskUsageRecord]
+    let searching: Bool
+
+    init(history: [TaskUsageRecord], search: String) {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        searching = !query.isEmpty
+        active = history.filter { !$0.archived }
+        archived = history.filter(\.archived)
+        matches = searching ? history.filter {
+            $0.displayTitle.localizedCaseInsensitiveContains(query) || $0.id.localizedCaseInsensitiveContains(query)
+        } : []
     }
 }
 

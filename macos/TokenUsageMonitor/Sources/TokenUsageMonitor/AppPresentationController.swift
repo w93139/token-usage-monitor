@@ -12,6 +12,7 @@ final class AppPresentationController: NSObject, ObservableObject, NSWindowDeleg
     }
 
     private let defaults = UserDefaults.standard
+    private weak var monitor: MonitorStore?
     private var mainWindow: NSWindow?
     private var quotaBadge: NSPanel?
     private var didOpenOnLaunch = false
@@ -23,6 +24,7 @@ final class AppPresentationController: NSObject, ObservableObject, NSWindowDeleg
 
     func openOnLaunch(monitor: MonitorStore) {
         guard !didOpenOnLaunch else { return }
+        self.monitor = monitor
         didOpenOnLaunch = true
         DispatchQueue.main.async { [weak self, weak monitor] in
             guard let self, let monitor else { return }
@@ -71,6 +73,7 @@ final class AppPresentationController: NSObject, ObservableObject, NSWindowDeleg
         mainWindow = window
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+        updateMainWindowVisibility()
     }
 
     private func showQuotaBadge(monitor: MonitorStore) {
@@ -112,10 +115,19 @@ final class AppPresentationController: NSObject, ObservableObject, NSWindowDeleg
         quotaBadge.close()
     }
 
+    func updateMainWindowVisibility() {
+        let visible = mainWindow.map { $0.isVisible && !$0.isMiniaturized && !NSApp.isHidden } ?? false
+        monitor?.setPanel(.mainWindow, visible: visible)
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) { updateMainWindowVisibility() }
+    func windowDidDeminiaturize(_ notification: Notification) { updateMainWindowVisibility() }
+
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow, window === mainWindow else { return }
         window.contentView = nil
         mainWindow = nil
+        updateMainWindowVisibility()
     }
 }
 

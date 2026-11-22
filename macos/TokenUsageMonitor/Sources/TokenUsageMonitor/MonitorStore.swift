@@ -6,7 +6,6 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot
     @Published private(set) var taskRecords: [TaskUsageRecord]
     @Published private(set) var apiRecords: [APIUsageRecord] = []
-    @Published private(set) var apiUsageTotals: [String: Int] = [:]
     @Published private(set) var apiMonitorAvailable = false
     @Published private(set) var connectionState: MonitorConnectionState = .starting
     @Published private(set) var lastError: String?
@@ -27,7 +26,7 @@ final class MonitorStore: ObservableObject {
     var contextHistory: [TaskUsageRecord] { contextSelection.history(in: taskRecords) }
     @Published private(set) var apiChannels: [APIChannel] = []
     @Published var selectedAPIChannel: String {
-        didSet { defaults.set(selectedAPIChannel, forKey: "api.selectedChannel") }
+        didSet { defaults.set(selectedAPIChannel, forKey: "api.selectedChannel"); updateLocalPolling() }
     }
     @Published private(set) var availableUpdate: AppUpdateInfo?
     @Published private(set) var updateStatus = "尚未检查更新"
@@ -42,7 +41,7 @@ final class MonitorStore: ObservableObject {
         didSet { defaults.set(deepSeekBudgetText, forKey: Keys.deepSeekBudget) }
     }
     @Published var menuQuotaSource: MenuQuotaSource {
-        didSet { defaults.set(menuQuotaSource.rawValue, forKey: Keys.menuQuotaSource) }
+        didSet { defaults.set(menuQuotaSource.rawValue, forKey: Keys.menuQuotaSource); updateLocalPolling() }
     }
     @Published var notificationsEnabled: Bool {
         didSet { defaults.set(notificationsEnabled, forKey: Keys.notificationsEnabled) }
@@ -69,6 +68,10 @@ final class MonitorStore: ObservableObject {
     private let worker = DispatchQueue(label: "token-monitor.collector", qos: .utility)
     private let taskWorker = DispatchQueue(label: "token-monitor.local-records", qos: .utility)
     private let contextWorker = DispatchQueue(label: "token-monitor.context", qos: .userInitiated)
+    enum DetailPanel { case mainWindow, menuPopover }
+    private var visiblePanels: Set<DetailPanel> = []
+    private(set) var detailGeneration = 0
+    private var isReadingMenuBudget = false
     private var contextReadPending = false
     private let workerKey = DispatchSpecificKey<Bool>()
     private var timer: DispatchSourceTimer?
@@ -84,9 +87,9 @@ final class MonitorStore: ObservableObject {
     private var terminationObserver: NSObjectProtocol?
     private var updateCheckTask: URLSessionDataTask?
 
-    init() {
+    init(storageDirectory: URL? = nil) {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        dataDirectory = support.appendingPathComponent("Token Usage Monitor", isDirectory: true)
+        dataDirectory = storageDirectory ?? support.appendingPathComponent("Token Usage Monitor", isDirectory: true)
         snapshotURL = dataDirectory.appendingPathComponent("menu-snapshot.json")
         subscriptionAnchor = SubscriptionPreferences(defaults: defaults).loadAnchor()
         taskRecordsURL = dataDirectory.appendingPathComponent("task-usage.json")
@@ -123,10 +126,6 @@ final class MonitorStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in self?.stop() }
-        DispatchQueue.main.async { [weak self] in
-            self?.start()
-            if self?.automaticallyChecksForUpdates == true { self?.checkForUpdates() }
-        }
     }
 
     deinit {
@@ -203,7 +202,7 @@ final class MonitorStore: ObservableObject {
     }
 
     var apiQuotaSummaries: [APIQuotaSummary] {
-        var providers = Set(apiUsageTotals.keys.map { $0.lowercased() })
+        var providers = Set(apiActivity.keys)
         providers.formUnion(["openai", "deepseek"])
         providers.formUnion(apiChannels.map(\.id))
         let preferred = ["openai", "deepseek"]
@@ -223,7 +222,7 @@ final class MonitorStore: ObservableObject {
         let budget = budgetText.flatMap(parseTokenBudget)
         return APIQuotaSummary(
             provider: normalized,
-            usedTokens: apiUsageTotals[normalized] ?? 0,
+            usedTokens: apiActivity[normalized]?.totalTokens ?? 0,
             budgetTokens: budget,
             customName: apiChannels.first { $0.id == normalized }?.name
         )
@@ -244,6 +243,7 @@ final class MonitorStore: ObservableObject {
     func start() {
         guard timer == nil else { return }
         stopped = false
+        if automaticallyChecksForUpdates { checkForUpdates() }
         if notificationsEnabled {
             UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         }
@@ -253,12 +253,69 @@ final class MonitorStore: ObservableObject {
         self.timer = timer
         timer.resume()
 
-        let taskTimer = DispatchSource.makeTimerSource(queue: .main)
-        taskTimer.schedule(deadline: .now(), repeating: 5)
-        taskTimer.setEventHandler { [weak self] in self?.refreshTasks() }
-        self.taskTimer = taskTimer
-        taskTimer.resume()
+        updateLocalPolling()
         worker.async { [weak self] in self?.startAPIUsageServer() }
+    }
+
+    func setPanel(_ panel: DetailPanel, visible: Bool) {
+        let wasEmpty = visiblePanels.isEmpty
+        if visible {
+            guard visiblePanels.insert(panel).inserted else { return }
+        } else {
+            guard visiblePanels.remove(panel) != nil else { return }
+        }
+        if wasEmpty != visiblePanels.isEmpty {
+            detailGeneration += 1
+            contextReadPending = false
+            _ = contextSelection.beginRead()
+            contextSnapshot = nil
+            contextReadAt = nil
+            updateLocalPolling()
+        } else if visible {
+            refreshTasks()
+        }
+    }
+
+    private var menuAPIProvider: String? {
+        switch menuQuotaSource {
+        case .codex: return nil
+        case .openAI: return "openai"
+        case .deepSeek: return "deepseek"
+        case .custom: return APIChannel.validID(selectedAPIChannel) ? selectedAPIChannel : nil
+        }
+    }
+
+    private func updateLocalPolling() {
+        taskTimer?.cancel()
+        taskTimer = nil
+        guard !stopped, !visiblePanels.isEmpty || menuAPIProvider != nil else { return }
+        refreshLocalUsage()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .milliseconds(250))
+        timer.setEventHandler { [weak self] in self?.refreshLocalUsage() }
+        taskTimer = timer
+        timer.resume()
+    }
+
+    private func refreshLocalUsage() {
+        guard !stopped else { return }
+        if !visiblePanels.isEmpty {
+            refreshTasks()
+            return
+        }
+        guard let provider = menuAPIProvider, !isReadingMenuBudget else { return }
+        isReadingMenuBudget = true
+        let generation = detailGeneration
+        taskWorker.async { [weak self] in
+            guard let self else { return }
+            let result = Result { try self.readAPIActivity(provider: provider) }
+            DispatchQueue.main.async {
+                self.isReadingMenuBudget = false
+                guard !self.stopped, self.visiblePanels.isEmpty, self.detailGeneration == generation,
+                      provider == self.menuAPIProvider, case .success(let activity) = result else { return }
+                if self.apiActivity[provider] != activity[provider] { self.apiActivity[provider] = activity[provider] }
+            }
+        }
     }
 
     func stop() {
@@ -449,28 +506,36 @@ final class MonitorStore: ObservableObject {
     }
 
     func refreshTasks() {
-        guard !stopped, !isRefreshingTasks else { return }
+        guard !stopped, !visiblePanels.isEmpty, !isRefreshingTasks else { return }
+        let generation = detailGeneration
         isRefreshingTasks = true
         taskWorker.async { [weak self] in
             guard let self else { return }
             let tasks = Result { try self.readTaskRecords() }
             let apis = Result { try self.readAPIUsageRecords() }
-            let totals = Result { try self.readAPIUsageTotals() }
             let activity = Result { try self.readAPIActivity() }
             let healthy = self.isAPIUsageServerHealthy()
             DispatchQueue.main.async {
-                guard !self.stopped else { self.isRefreshingTasks = false; return }
+                self.isRefreshingTasks = false
+                guard !self.stopped, !self.visiblePanels.isEmpty else { return }
+                guard self.detailGeneration == generation else {
+                    self.refreshTasks()
+                    return
+                }
                 switch tasks {
                 case .success(let rows):
                     let previousID = self.selectedContextTask?.id
-                    self.taskRecords = ContextTaskSelection.normalized(rows)
+                    let records = ContextTaskSelection.normalized(rows)
+                    if records != self.taskRecords {
+                        self.taskRecords = records
+                        self.persistTaskRecords(records)
+                    }
                     self.contextSelection.reconcile(with: self.taskRecords)
                     if previousID != self.selectedContextTask?.id {
                         self.contextSnapshot = nil
                         self.contextReadAt = nil
                         _ = self.contextSelection.beginRead() // Invalidate any previous task's in-flight result.
                     }
-                    self.persistTaskRecords(self.taskRecords)
                     self.tasksReadAt = Date()
                     self.taskReadError = nil
                 case .failure:
@@ -478,16 +543,13 @@ final class MonitorStore: ObservableObject {
                 }
                 do {
                     let rows = try apis.get()
-                    let sums = try totals.get()
                     let received = try activity.get()
                     self.apiRecords = rows
-                    self.apiUsageTotals = sums
                     self.apiActivity = received
                     self.apiReadError = nil
                     self.apiReadAt = Date()
                 } catch { self.apiReadError = "读取失败，保留上次 API 数据" }
                 self.apiMonitorAvailable = healthy
-                self.isRefreshingTasks = false
                 self.refreshContext()
             }
         }
@@ -506,7 +568,7 @@ final class MonitorStore: ObservableObject {
     }
 
     func refreshContext() {
-        guard !stopped else { return }
+        guard !stopped, !visiblePanels.isEmpty else { return }
         guard let task = selectedContextTask else {
             contextSnapshot = nil
             return
@@ -564,16 +626,22 @@ final class MonitorStore: ObservableObject {
         return data
     }
 
-    private func readAPIActivity() throws -> [String: APIActivity] {
+    private func readAPIActivity(provider: String? = nil) throws -> [String: APIActivity] {
         let database = dataDirectory.appendingPathComponent("usage.sqlite3")
         guard FileManager.default.fileExists(atPath: database.path) else { return [:] }
-        let data = try runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path,
-            "SELECT LOWER(provider) AS provider, COUNT(*) AS count, MAX(captured_at) AS last FROM api_usage GROUP BY LOWER(provider);"])
+        // Built-in and custom providers use APIChannel's restricted ID alphabet.
+        if let provider, !APIChannel.validID(provider) { throw MonitorError.invalidResponse }
+        let filter = provider.map { "WHERE LOWER(provider) = '\($0)'" } ?? ""
+        let query = """
+        SELECT LOWER(provider) AS provider, COUNT(*) AS count, SUM(total_tokens) AS total, MAX(captured_at) AS last
+        FROM api_usage \(filter) GROUP BY LOWER(provider);
+        """
+        let data = try runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path, query])
         guard !data.isEmpty else { return [:] }
         guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw MonitorError.invalidResponse }
         return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
-            guard let provider = row.string("provider"), let count = row.integer("count"), let last = row.integer("last") else { return nil }
-            return (provider, APIActivity(count: count, lastReceivedAt: Date(timeIntervalSince1970: TimeInterval(last))))
+            guard let provider = row.string("provider"), let count = row.integer("count"), let total = row.integer("total"), let last = row.integer("last") else { return nil }
+            return (provider, APIActivity(count: count, totalTokens: total, lastReceivedAt: Date(timeIntervalSince1970: TimeInterval(last))))
         })
     }
 
@@ -676,19 +744,6 @@ final class MonitorStore: ObservableObject {
                 outputTokens: row.integer("outputTokens") ?? 0, reasoningTokens: row.integer("reasoningTokens") ?? 0,
                 totalTokens: total, source: row.string("source") ?? "response")
         }
-    }
-
-    private func readAPIUsageTotals() throws -> [String: Int] {
-        let database = dataDirectory.appendingPathComponent("usage.sqlite3")
-        guard FileManager.default.fileExists(atPath: database.path) else { return [:] }
-        let query = "SELECT LOWER(provider) AS provider, SUM(total_tokens) AS total FROM api_usage GROUP BY LOWER(provider);"
-        let data = try runLocalProcess(executable: "/usr/bin/sqlite3", arguments: ["-readonly", "-json", database.path, query])
-        guard !data.isEmpty else { return [:] }
-        guard let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { throw MonitorError.invalidResponse }
-        return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
-            guard let provider = row.string("provider"), let total = row.integer("total") else { return nil }
-            return (provider.lowercased(), total)
-        })
     }
 
     private func readTaskRecords() throws -> [TaskUsageRecord] {

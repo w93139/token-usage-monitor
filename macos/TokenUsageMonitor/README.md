@@ -2,7 +2,7 @@
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
-## Version 1.7.6
+## Version 1.7.7
 
 Right-click or Control-click the menu-bar percentage to quit directly. A primary click toggles the monitor popover.
 
@@ -36,7 +36,7 @@ Context reads only usage/reset metadata from a bounded in-memory tail of the sel
 - Local notifications at configurable thresholds
 - Detection of scheduled resets and newly granted reset credits
 - Manual refresh, local-only storage, and optional launch at login
-- Five-second per-task token totals with local conversation titles
+- Immediate task refresh on opening a panel, followed by five-second polling while visible. Hidden panels pause detail reads and retain only the selected menu-bar budget. The task switcher shows five recent unarchived alternatives and searches the most recent 100 records, including archived tasks.
 - Local usage ingestion for OpenAI, DeepSeek, and compatible API responses
 - OpenAI/DeepSeek Token budgets with used and remaining quota displays
 - Selectable Codex, OpenAI, or DeepSeek quota source for the menu-bar ring

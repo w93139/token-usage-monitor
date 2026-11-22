@@ -2,6 +2,11 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.7.7] - 2026-11-22
+
+- Pause desktop task, API detail and context reads when both detail panels are closed, hidden or minimized. Opening a panel refreshes immediately. Task caches update only when rows change. A selected external API menu-bar budget continues to update while the panels are closed.
+- Move history into the task switcher beside the current context. Show five recent unarchived alternatives first, fold archived tasks, and search recent task names and IDs in batches of ten. Existing rows stay in place during live updates.
+
 ## [1.7.6] - 2026-11-22
 
 - Position the shortcut menu below the status button in flipped AppKit coordinates so the Quit row clears the system menu bar.

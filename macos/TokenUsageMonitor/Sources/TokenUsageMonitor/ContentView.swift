@@ -11,15 +11,25 @@ struct MonitorPanel: View {
     @State private var showsSupplementalLimits = false
     @State private var hoveredDailyUsage: DailyUsage?
     @State private var taskSearch = ""
-    @State private var showsAllTasks = false
+    @State private var showsTaskPicker = false
+    @State private var pickerHistory: [TaskUsageRecord] = []
+    @State private var reloadPickerOnRead = false
+    @State private var pickerGeneration = 0
+    @State private var activeLimit = 5
+    @State private var searchLimit = 10
+    @State private var archiveLimit = 10
+    @State private var showsArchived = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             ScrollView {
-                if showsSettings { settings } else { dashboard }
+                if showsSettings { settings }
+                else if showsTaskPicker { taskUsageCard }
+                else { dashboard }
             }
+            .id(showsTaskPicker)
             Divider()
             footer
         }
@@ -60,7 +70,7 @@ struct MonitorPanel: View {
             .buttonStyle(GlassButtonStyle(compact: true))
             .foregroundStyle(presentationController.isQuotaBadgePinned ? Color.accentColor : Color.primary)
             .help(presentationController.isQuotaBadgePinned ? "隐藏顶部余量浮标" : "固定余量数字到屏幕顶部")
-            Button { showsSettings.toggle() } label: {
+            Button { showsTaskPicker = false; showsSettings.toggle() } label: {
                 Image(systemName: showsSettings ? "xmark" : "gearshape")
                     .frame(width: 20, height: 20)
             }
@@ -109,7 +119,12 @@ struct MonitorPanel: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 45)
             } else {
-                ForEach(visibleRateWindows) { window in rateCard(window) }
+                if let primary = monitor.primaryWindow { rateCard(primary) }
+            }
+
+            ContextUsageCard(monitor: monitor, switchTask: openTaskPicker)
+            if !monitor.snapshot.rateWindows.isEmpty {
+                ForEach(visibleRateWindows.filter { $0.id != monitor.primaryWindow?.id }) { window in rateCard(window) }
                 if hiddenSupplementalCount > 0 && !showsSupplementalLimits {
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { showsSupplementalLimits = true }
@@ -130,8 +145,6 @@ struct MonitorPanel: View {
             }
 
             if let account = monitor.snapshot.account { summaryCard(account) }
-            ContextUsageCard(monitor: monitor)
-            taskUsageCard
             apiUsageCard
             if !monitor.snapshot.dailyUsage.isEmpty { historyChart }
 
@@ -297,16 +310,31 @@ struct MonitorPanel: View {
         .glassCard()
     }
 
+    private func openTaskPicker() {
+        // Pin the candidate rows until an explicit refresh or a new visit. A
+        // changing automatically followed task must not move the row under the pointer.
+        pickerGeneration = monitor.detailGeneration
+        pickerHistory = monitor.contextHistory
+        reloadPickerOnRead = monitor.tasksReadAt == nil || pickerHistory.isEmpty
+        taskSearch = ""
+        activeLimit = 5
+        searchLimit = 10
+        archiveLimit = 10
+        showsArchived = false
+        showsTaskPicker = true
+    }
+
     private var taskUsageCard: some View {
-        let history = monitor.contextHistory.filter {
-            taskSearch.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(taskSearch) || $0.id.localizedCaseInsensitiveContains(taskSearch)
-        }
-        let visible = showsAllTasks || !taskSearch.isEmpty ? history : Array(history.prefix(10))
+        let list = TaskPickerResults(history: pickerHistory, search: taskSearch)
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("切换任务 · 累计 Token").font(.subheadline.weight(.semibold))
+                Button { showsTaskPicker = false } label: { Label("返回", systemImage: "chevron.left") }
+                Text("切换任务").font(.subheadline.weight(.semibold))
                 Spacer()
-                Button { monitor.refreshTasks() } label: {
+                Button {
+                    reloadPickerOnRead = true
+                    monitor.refreshTasks()
+                } label: {
                     HStack(spacing: 4) {
                         if monitor.isRefreshingTasks { ProgressView().controlSize(.mini) }
                         else { Image(systemName: "arrow.clockwise") }
@@ -331,11 +359,45 @@ struct MonitorPanel: View {
             Text("Codex 本地任务累计计数；重复输入可能累计计入，子代理是否合入尚未核实。")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             TextField("搜索其他任务名称或编号", text: $taskSearch).textFieldStyle(.roundedBorder)
-            Text("已排除正在查看的任务 · 最近 100 条记录")
-                .font(.caption2).foregroundStyle(.secondary)
-            if visible.isEmpty { Text(taskSearch.isEmpty ? "暂无其他任务" : "没有匹配的其他任务").font(.caption).foregroundStyle(.secondary) }
-            ForEach(visible) { task in
-                Button { monitor.selectContextTask(task.id) } label: {
+                .onChange(of: taskSearch) { _ in searchLimit = 10 }
+            Text("搜索最近 100 条任务记录，含归档任务").font(.caption2).foregroundStyle(.secondary)
+            if list.searching {
+                if list.matches.isEmpty { Text("没有匹配的其他任务").font(.caption) }
+                taskRows(list.matches.prefix(searchLimit))
+                if list.matches.count > searchLimit { Button("显示更多结果") { searchLimit += 10 } }
+            } else {
+                Text("最近未归档任务").font(.caption.weight(.semibold))
+                if list.active.isEmpty { Text("暂无其他未归档任务").font(.caption) }
+                taskRows(list.active.prefix(activeLimit))
+                if list.active.count > activeLimit { Button("更多未归档任务") { activeLimit += 10 } }
+                if !list.archived.isEmpty {
+                    DisclosureGroup("已归档（\(list.archived.count)）", isExpanded: $showsArchived) {
+                        if showsArchived {
+                            taskRows(list.archived.prefix(archiveLimit))
+                            if list.archived.count > archiveLimit { Button("更多归档任务") { archiveLimit += 10 } }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .onChange(of: monitor.tasksReadAt) { _ in
+            if reloadPickerOnRead || pickerGeneration != monitor.detailGeneration {
+                pickerGeneration = monitor.detailGeneration
+                pickerHistory = monitor.contextHistory
+                reloadPickerOnRead = false
+            }
+        }
+    }
+
+    private func taskRows(_ visible: ArraySlice<TaskUsageRecord>) -> some View {
+        ForEach(visible) { task in
+            let available = monitor.taskRecords.contains { $0.id == task.id }
+            Button {
+                guard available else { return }
+                monitor.selectContextTask(task.id)
+                showsTaskPicker = false
+            } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "bubble.left.and.text.bubble.right")
                         .foregroundStyle(.secondary)
@@ -364,18 +426,12 @@ struct MonitorPanel: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                }
-                .buttonStyle(GlassButtonStyle(compact: true)).padding(.vertical, 3)
-                .help("\(task.displayTitle)\n累计 \(task.tokens.formatted()) tokens\n任务更新时间：\(task.updatedAt.formatted())\n点击查看此任务上下文")
-                if task.id != visible.last?.id { Divider() }
             }
-            if taskSearch.isEmpty && history.count > 10 {
-                Button(showsAllTasks ? "收起任务列表" : "显示全部 \(history.count) 个其他任务") { showsAllTasks.toggle() }
-                    .font(.caption)
-            }
+            .disabled(!available)
+            .buttonStyle(GlassButtonStyle(compact: true)).padding(.vertical, 3)
+            .help("\(task.displayTitle)\n累计 \(task.tokens.formatted()) tokens\n任务更新时间：\(task.updatedAt.formatted())")
+            if task.id != visible.last?.id { Divider() }
         }
-        .padding(12)
-        .glassCard()
     }
 
     private var apiUsageCard: some View {
@@ -562,7 +618,7 @@ struct MonitorPanel: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Label("只提取本地用量元数据，不保存对话正文", systemImage: "lock.shield")
                     Label("额外刷新只提醒，不会自动兑换", systemImage: "hand.raised")
-                    Label("任务每 5 秒、账户额度每 30 秒尝试刷新", systemImage: "clock.arrow.circlepath")
+                    Label("打开面板时每 5 秒刷新任务，收起后暂停；账户额度每 30 秒尝试刷新", systemImage: "clock.arrow.circlepath")
                     Label("本机保存任务名称与 Token 数，不保存对话正文", systemImage: "text.badge.checkmark")
                 }
                 .font(.caption)

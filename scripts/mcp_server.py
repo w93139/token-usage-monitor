@@ -236,7 +236,7 @@ class MCPServer:
                 {
                     "protocolVersion": requested or "2024-11-05",
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "token-usage-monitor", "version": "1.7.6"},
+                    "serverInfo": {"name": "token-usage-monitor", "version": "1.7.7"},
                     "instructions": "Local Codex task, OpenAI-compatible API token, and rate-limit monitoring. Never stores prompts, responses, or API keys. Ordinary collection is read-only; a separate worker may use earned reset credits only under an explicitly enabled account-bound expiry policy.",
                 },
             )

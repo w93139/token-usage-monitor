@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ContextUsageCard: View {
     @ObservedObject var monitor: MonitorStore
+    let switchTask: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -10,6 +11,7 @@ struct ContextUsageCard: View {
                 Text(monitor.contextSelection.pinnedID == nil ? "最近活动上下文" : "所选任务上下文")
                     .font(.subheadline.weight(.semibold))
                 Spacer()
+                Button("切换任务", action: switchTask).font(.caption)
                 if monitor.contextSelection.pinnedID != nil {
                     Button("返回最近活动") { monitor.selectContextTask(nil) }
                         .font(.caption)
@@ -48,7 +50,7 @@ struct ContextUsageCard: View {
                 Text("此任务累计 \(task.tokens.formatted()) tokens")
                     .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
             } else {
-                Text("暂无未归档的活动任务，可从下方选择历史任务。")
+                Text("暂无未归档的活动任务，可点“切换任务”查看历史。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             TimelineView(.periodic(from: .now, by: 1)) { tick in

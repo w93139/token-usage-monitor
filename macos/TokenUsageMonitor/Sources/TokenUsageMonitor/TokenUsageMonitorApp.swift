@@ -21,6 +21,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSPopoverDele
     private var popover: NSPopover?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        monitor.start()
         installMainMenu()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
@@ -98,8 +99,25 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSPopoverDele
         panel.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
+    func applicationDidHide(_ notification: Notification) {
+        presentation.updateMainWindowVisibility()
+        monitor.setPanel(.menuPopover, visible: false)
+    }
+
+    func applicationDidUnhide(_ notification: Notification) {
+        presentation.updateMainWindowVisibility()
+        monitor.setPanel(.menuPopover, visible: popover?.isShown == true)
+    }
+
+    func popoverDidShow(_ notification: Notification) {
+        if let shown = notification.object as? NSPopover, shown === popover {
+            monitor.setPanel(.menuPopover, visible: true)
+        }
+    }
+
     func popoverDidClose(_ notification: Notification) {
         if let closed = notification.object as? NSPopover, closed === popover {
+            monitor.setPanel(.menuPopover, visible: false)
             popover = nil
         }
     }
