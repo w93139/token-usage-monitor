@@ -588,13 +588,12 @@ struct MonitorPanel: View {
             .buttonStyle(GlassButtonStyle(compact: true))
             .disabled(monitor.isRefreshing)
             .help("刷新账户额度与本地记录")
-            Menu {
-                Button("退出 Token监测") { NSApplication.shared.terminate(nil) }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+            Button { NSApplication.shared.terminate(nil) } label: {
+                Label("退出", systemImage: "power")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+            .buttonStyle(GlassButtonStyle(compact: true))
+            .accessibilityLabel("退出 Token监测")
+            .help("退出 Token监测并停止本应用的后台采集")
         }
         TimelineView(.periodic(from: .now, by: 60)) { tick in
             HStack(alignment: .firstTextBaseline, spacing: 6) {

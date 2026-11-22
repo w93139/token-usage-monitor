@@ -2,9 +2,11 @@
 
 All notable changes to Token监测 are documented here.
 
-## [Unreleased]
+## [1.7.4] - 2026-11-22
 
 ### Fixed
+
+- Make Quit directly visible in the shared panel footer instead of hiding it in the More menu. The labeled power button exits the app and uses the existing termination cleanup.
 
 - Hide expired reset cards and reconcile disappeared cards without labeling them as redeemed. Preserve still-valid cached details during incomplete service responses; native caches retain expiration times.
 

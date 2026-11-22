@@ -2,7 +2,9 @@
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
-## Version 1.7.3
+## Version 1.7.4
+
+The shared main-window/menu-bar panel now exposes a labeled Quit button directly in its footer, using the existing application termination cleanup.
 
 Monthly renewal estimates require one civil-date entry, retain the original day across short months, and survive timezone changes. The footer labels estimates explicitly; no website login, browser engine, or billing network poll is added. A single system frosted-glass backdrop, tinted cards and hover/press button feedback respect Reduce Transparency and Reduce Motion.
 
