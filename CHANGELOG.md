@@ -2,6 +2,10 @@
 
 All notable changes to Token监测 are documented here.
 
+## [1.7.6] - 2026-11-22
+
+- Position the shortcut menu below the status button in flipped AppKit coordinates so the Quit row clears the system menu bar.
+
 ## [1.7.5] - 2026-11-22
 
 - Right-click or Control-click the menu-bar percentage and choose Quit. A primary click opens the monitor panel. The shortcut uses a native status item and the existing application termination path.

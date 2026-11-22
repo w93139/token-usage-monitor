@@ -77,7 +77,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate, NSPopoverDele
             let menu = NSMenu()
             let quit = menu.addItem(withTitle: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             quit.target = NSApp
-            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.minY - 2), in: button)
+            // Keep the first row clear of the system menu bar in either coordinate system.
+            let belowButton = button.isFlipped ? button.bounds.maxY + 2 : button.bounds.minY - 2
+            menu.popUp(positioning: nil, at: NSPoint(x: button.bounds.minX, y: belowButton), in: button)
             return
         }
 
