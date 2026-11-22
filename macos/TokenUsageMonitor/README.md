@@ -2,7 +2,9 @@
 
 Native macOS 13+ menu-bar companion for the Token Usage Monitor Codex plugin.
 
-## Version 1.7.4
+## Version 1.7.5
+
+Right-click or Control-click the menu-bar percentage to quit directly. A primary click toggles the monitor popover.
 
 The shared main-window/menu-bar panel now exposes a labeled Quit button directly in its footer, using the existing application termination cleanup.
 
